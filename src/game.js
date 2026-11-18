@@ -15,17 +15,18 @@ import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
 import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
-import { CONFIG, MISSION_DEFS, STORY_INTRO } from './config.js';
+import { CONFIG, MISSION_DEFS } from './config.js';
 import { createRandom } from './random.js';
-import { buildCity, districtAt } from './city.js';
+import { buildCity, districtAt, streetAt } from './city.js';
 import { createCar, spawnTrafficCar, updateTrafficCar, createSkids, randomCarColor, makeCarMesh, disposeCarMesh, spinWheels, steerWheels, SPECS } from './vehicles.js';
-import { makePersonMesh, spawnPedestrian, spawnVendor, updatePedestrian, spawnEnemy, updateEnemy } from './people.js';
+import { makePersonMesh, spawnPedestrian, spawnVendor, updatePedestrian, spawnEnemy, updateEnemy, markWitness, clearWitness, spawnFleeingPed, nearestBlock } from './people.js';
 import { createWanted, addHeat, setStars, ensurePolice, updatePolice, clearPolice, pursuers } from './police.js';
 import { createMissions, startMission, updateMission, completeMission, failMission, currentMission, currentTarget, missionObjectiveText, stageLabel, missionProgress, nextMissionTitle, advanceDialogue, DIALOGUE_LINE_SECONDS } from './missions.js';
 import { createAudio } from './audio.js';
 import { createHud } from './hud.js';
 import { createInput, ACTION_ENTER, ACTION_SHOOT, ACTION_PAUSE, ACTION_MUTE, ACTION_RESTART, ACTION_CONFIRM, ACTION_MAP, ACTION_RADIO, ACTION_NIGHT, ACTION_SPAWN_CAR, ACTION_WEAPON_1, ACTION_WEAPON_2, ACTION_WEAPON_3, ACTION_WEAPON_4, ACTION_WEAPON_5, ACTION_WEAPON_6 } from './input.js';
 import { createPackages } from './packages.js';
+import { createMedals } from './medals.js';
 import { updateLights, lightFor } from './trafficlights.js';
 
 const STEP = 1 / 60;
@@ -250,9 +251,20 @@ export function createGame(canvas, seed) {
     const cx = camera.position.x;
     const cz = camera.position.z;
     for (let i = 0; i < RAIN_COUNT; i += 1) {
-      rainPos[i * 3] = cx + (rainRng.next() * 2 - 1) * cfg.rain.boxX;
+      // v9 iteration 5 (§0): keep every streak 6 m from the camera — a
+      // streak right on the lens read as a tall pale vertical band (a
+      // light beam) in the dialogue shot.
+      let rx = (rainRng.next() * 2 - 1) * cfg.rain.boxX;
+      let rz = (rainRng.next() * 2 - 1) * cfg.rain.boxZ;
+      const rd = Math.hypot(rx, rz);
+      if (rd < 6) {
+        const s = 6 / (rd || 1);
+        rx *= s;
+        rz *= s;
+      }
+      rainPos[i * 3] = cx + rx;
       rainPos[i * 3 + 1] = rainRng.next() * cfg.rain.boxY;
-      rainPos[i * 3 + 2] = cz + (rainRng.next() * 2 - 1) * cfg.rain.boxZ;
+      rainPos[i * 3 + 2] = cz + rz;
     }
     rainGeo.attributes.position.needsUpdate = true;
   }
@@ -292,8 +304,18 @@ export function createGame(canvas, seed) {
       let z = rainPos[i * 3 + 2];
       if (y < 0) {
         y = by;
-        x = cx + (rainRng.next() * 2 - 1) * bx;
-        z = cz + (rainRng.next() * 2 - 1) * bz;
+        // v9 iteration 5 (§0): a respawned streak never lands within
+        // 6 m of the camera (see scatterRain — the light-beam band).
+        let rx = (rainRng.next() * 2 - 1) * bx;
+        let rz = (rainRng.next() * 2 - 1) * bz;
+        const rd = Math.hypot(rx, rz);
+        if (rd < 6) {
+          const s = 6 / (rd || 1);
+          rx *= s;
+          rz *= s;
+        }
+        x = cx + rx;
+        z = cz + rz;
       }
       if (x > cx + bx) x -= bx * 2;
       else if (x < cx - bx) x += bx * 2;
@@ -321,6 +343,7 @@ export function createGame(canvas, seed) {
 
   const skids = createSkids(scene);
   const packages = createPackages(scene, rng);
+  const medals = createMedals(scene);
 
   // The police searchlight: a spotlight that rides under the helicopter and
   // a translucent cone that shows the beam, plus a pool of light on the
@@ -444,8 +467,66 @@ export function createGame(canvas, seed) {
     // REP earned outside missions (races +1 stunt, +5 a race) — saved,
     // and it counts toward the mission-6 REP gate.
     repBonus: 0,
+    // v9 iteration 5 (§2): six skills, each with XP and a level (0-5,
+    // thresholds in cfg.skillLevels). Levels have small real effects —
+    // Driving (top speed + accel), Stamina (run speed), Aim (hitscan
+    // tolerance), Stealth (heat), Influence (shop prices), Street Sense
+    // (map shows packages + medals). XP is earned by doing the thing.
+    skills: { driving: 0, stamina: 0, aim: 0, stealth: 0, influence: 0, street: 0 },
+    // The outfit shop changes Rico's shirt colour (saved).
+    shirtColor: 0x2a7a8c,
+    // Ground height under the player (1.15 on the pier deck, the
+    // causeway and Pulau Fuego, 0 everywhere else) — see groundYAt.
+    groundY: 0,
+    // Distance driven / sprint time since the last skill XP (Driving
+    // earns 1 XP per 100 m, Stamina 1 XP per 10 s of sprinting).
+    driveDist: 0,
+    sprintT: 0,
   };
   playerMesh.position.set(-112, 0, 60);
+
+  // Skills (v9 iteration 5, §2): level from XP via the thresholds in
+  // config; XP is earned by doing the thing, and the level is what the
+  // effects read.
+  function skillLevel(name) {
+    const xp = player.skills[name] ?? 0;
+    let level = 0;
+    for (let i = 0; i < cfg.skillLevels.length; i += 1) {
+      if (xp >= cfg.skillLevels[i]) level = i;
+    }
+    return level;
+  }
+  function addSkillXp(name, amount) {
+    player.skills[name] = (player.skills[name] ?? 0) + amount;
+  }
+  // v9 iteration 5 (§2): Stealth — every heat source is reduced 5% per
+  // Stealth level. All heat in this file goes through this wrapper.
+  function addHeatScaled(amount) {
+    addHeat(wanted, amount * (1 - 0.05 * skillLevel('stealth')));
+  }
+  // REP rank (v9 iteration 5, §2): the named rank for a REP total, from
+  // cfg.repRanks — the highest rank whose threshold the player meets.
+  function repRank(rep) {
+    let rank = cfg.repRanks[0];
+    for (const r of cfg.repRanks) {
+      if (rep >= r.rep) rank = r;
+    }
+    return rank;
+  }
+
+  // Progress to the next REP rank, 0–1 (1 at the top rank).
+  function repProgress() {
+    const rep = repPoints();
+    const ranks = cfg.repRanks;
+    let cur = ranks[0];
+    let next = null;
+    for (const r of ranks) {
+      if (rep >= r.rep) cur = r;
+      else { next = r; break; }
+    }
+    if (!next) return 1;
+    return Math.min(1, Math.max(0, (rep - cur.rep) / (next.rep - cur.rep)));
+  }
 
   // Weapon view models (v9 iteration 3): procedural, no assets. The knife
   // rides in the right hand (it swings with the arm); the bazooka tube
@@ -516,22 +597,52 @@ export function createGame(canvas, seed) {
   beaconRing.position.set(city.landmarks.garage.x, 0.1, city.landmarks.garage.z);
   scene.add(beaconRing);
 
-  // Street race rings (v9 iteration 4): flat rings on the road at the
+  // Street race rings (v9 iteration 5): flat rings on the road at the
   // start, the two checkpoints and the finish. Dim grey while inactive,
   // gold on the current target, green once passed. Hidden until a race
-  // starts.
+  // starts. The rings are repositioned per race (setRaceRings) — all
+  // three races have the same 4-point shape.
   const raceRings = [];
-  for (const pt of [cfg.race.start, ...cfg.race.checkpoints, cfg.race.finish]) {
+  for (let i = 0; i < 4; i += 1) {
     const ring = new THREE.Mesh(
       new THREE.RingGeometry(3, 4.5, 24),
       new THREE.MeshBasicMaterial({ color: 0x555555, transparent: true, opacity: 0.6, side: THREE.DoubleSide, depthWrite: false }),
     );
     ring.rotation.x = -Math.PI / 2;
-    ring.position.set(pt.x, 0.1, pt.z);
+    ring.position.set(cfg.races[0].start.x, 0.1, cfg.races[0].start.z);
     ring.visible = false;
     scene.add(ring);
     raceRings.push(ring);
   }
+  function setRaceRings(race) {
+    const pts = [race.start, ...race.checkpoints, race.finish];
+    raceRings.forEach((r, i) => {
+      r.position.set(pts[i].x, 0.1, pts[i].z);
+      r.visible = false;
+      r.material.color.setHex(0x555555);
+    });
+  }
+  // Delivery markers (v9 iteration 5, §2): a gold ring at each available
+  // pickup, one green ring at the active drop. Visibility is updated
+  // every step (see step()).
+  const deliveryPickupRings = cfg.deliveries.map((d) => {
+    const ring = new THREE.Mesh(
+      new THREE.RingGeometry(2.5, 3.5, 24),
+      new THREE.MeshBasicMaterial({ color: 0xffd23e, transparent: true, opacity: 0.7, side: THREE.DoubleSide, depthWrite: false }),
+    );
+    ring.rotation.x = -Math.PI / 2;
+    ring.position.set(d.pickup.x, 0.1, d.pickup.z);
+    ring.visible = false;
+    scene.add(ring);
+    return ring;
+  });
+  const deliveryDropRing = new THREE.Mesh(
+    new THREE.RingGeometry(3, 4.5, 24),
+    new THREE.MeshBasicMaterial({ color: 0x22ff44, transparent: true, opacity: 0.7, side: THREE.DoubleSide, depthWrite: false }),
+  );
+  deliveryDropRing.rotation.x = -Math.PI / 2;
+  deliveryDropRing.visible = false;
+  scene.add(deliveryDropRing);
 
   // Traffic, parked cars and the orange coupe for mission 2.
   const traffic = [];
@@ -556,9 +667,14 @@ export function createGame(canvas, seed) {
   coupe.isTarget = true;
 
   // Pedestrians on the sidewalks, plus a vendor behind every mercado stall.
+  // walkerCount tracks the walking crowd (vendors sit after them in the
+  // array) so the crowd slider can add/remove walkers without touching
+  // the vendors.
   const pedestrians = [];
+  let walkerCount = 0;
   for (let i = 0; i < cfg.pedestrians.count; i += 1) {
     pedestrians.push(spawnPedestrian(scene, rng, cfg, city.blockCenters));
+    walkerCount += 1;
   }
   for (const stall of city.stallSpots) {
     pedestrians.push(spawnVendor(scene, rng, stall.vx, stall.vz, stall.vFacing));
@@ -746,6 +862,20 @@ export function createGame(canvas, seed) {
     // the start line — the player has to drive out past 8 m first.
     race: null,
     raceArmed: true,
+    // Graphics settings (v9 iteration 5, §5): the MED preset's values
+    // are the defaults. fogMul scales the fog density in updateDaylight.
+    fogMul: 1,
+    settings: {
+      preset: 'MED',
+      traffic: cfg.traffic.count,
+      crowd: cfg.pedestrians.count,
+      viewDistance: cfg.presets.MED.far,
+      mouseSens: 1,
+      master: 1,
+      music: 1,
+      effects: 1,
+      engine: 1,
+    },
   };
 
   // Wanted stars on the previous step, for the evaded toast: the toast
@@ -754,10 +884,17 @@ export function createGame(canvas, seed) {
   let prevGrace = 0;
   // Cars the V key spawned (capped, oldest removed first).
   const spawnedCars = [];
-  // Free-roam progress (v9 iteration 4): races won and stunts landed.
-  // Both feed REP (a race is worth 5, a stunt 1) and both are saved.
+  // Free-roam progress (v9 iteration 5): three races, each winnable
+  // once (raceWins[i]), six stunt ramps, each with a first-time prize
+  // (landedRamps), and three courier jobs (deliveriesDone[i]). All feed
+  // REP and all are saved.
   let racesWon = 0;
+  let raceWins = [false, false, false];
+  let raceIdx = -1;
   let stunts = 0;
+  const landedRamps = new Set();
+  let delivery = null;
+  let deliveriesDone = [false, false, false];
 
   // One-shot presses are collected once per frame here and consumed by the
   // first fixed step, so pause/mute work even while the game is paused
@@ -861,6 +998,7 @@ export function createGame(canvas, seed) {
       if (state.screen === SCREEN_PLAY) {
         state.screen = SCREEN_PAUSED;
         document.getElementById('screen-pause').style.display = 'flex';
+        renderPauseSkills();
       } else if (state.screen === SCREEN_PAUSED) {
         state.screen = SCREEN_PLAY;
         document.getElementById('screen-pause').style.display = 'none';
@@ -924,7 +1062,23 @@ export function createGame(canvas, seed) {
     for (const c of city.roadLines) {
       if (Math.abs(x - c) < half || Math.abs(z - c) < half) return true;
     }
+    // v9 iteration 5 (§3): the sand track from the x=140 road to the
+    // pier (z 98-102), the pier deck + causeway, and Pulau Fuego are
+    // drivable — the car can actually drive to the island.
+    if (x >= 140 && x <= 222 && z >= 98 && z <= 102) return true;
+    const isl = cfg.island;
+    if (x >= isl.x0 && x <= isl.x1 + 3 && z >= isl.z0 - 2 && z <= isl.z1 + 2) return true;
     return false;
+  }
+
+  // Ground height (v9 iteration 5, §3): 1.15 on the pier deck, the
+  // causeway and Pulau Fuego (all at the pier-deck height), 0 everywhere
+  // else. The player, their car and the traffic all ride it, so nobody
+  // sinks through the deck or floats above the sand.
+  function groundYAt(x, z) {
+    if ((x >= 168 && x <= 222 && z >= 98 && z <= 102)
+      || (x >= 222 && x <= 275 && z >= 70 && z <= 130)) return 1.15;
+    return 0;
   }
 
   function allCars() {
@@ -970,6 +1124,18 @@ export function createGame(canvas, seed) {
       policeCars: wanted.policeCars,
       roadblocks: wanted.roadblocks,
       shops: cfg.shops,
+      // v9 iteration 5 (§2/§3): the big map draws the courier pickups,
+      // race starts and (once Street Sense is 2+) the medals, so the
+      // player can plan a run instead of stumbling on them.
+      deliveries: cfg.deliveries.map((d, i) => ({
+        pickup: d.pickup, drop: d.drop, done: deliveriesDone[i],
+        active: !!delivery && delivery.idx === i, locked: repPoints() < d.repReq,
+      })),
+      races: cfg.races.map((r, i) => ({
+        start: r.start, won: raceWins[i], locked: repPoints() < r.repReq,
+      })),
+      medals: medals.list.map((m) => ({ x: m.x, z: m.z, taken: m.taken })),
+      showMedals: skillLevel('street') >= 2,
       playerX: pp.x,
       playerZ: pp.z,
       playerHeading: player.inCar && player.car ? player.car.heading : player.heading,
@@ -1040,27 +1206,65 @@ export function createGame(canvas, seed) {
   }
   function sprayMenuItems() {
     return [
-      { key: 1, label: 'Repair car (condition 100)', price: cfg.economy.repairCost, can: () => !!player.car && (player.car.condition ?? 100) < 100, buy: () => { player.car.condition = 100; } },
+      { key: 1, label: 'Repair car (condition 100)', price: cfg.economy.repairCost, can: () => !!player.car && (player.car.condition ?? 100) < 100, buy: () => { player.car.condition = 100; player.car.fireWarned = false; } },
       { key: 2, label: 'Repaint — clears the heat', price: cfg.economy.resprayCost, can: () => !!player.car && wanted.stars > 0, buy: () => { if (player.car) resprayCar(player.car); setStars(wanted, 0); } },
       { key: 3, label: 'Bribe — one star off', price: cfg.economy.bribeCost, can: () => wanted.stars > 0, buy: () => { setStars(wanted, wanted.stars - 1); } },
     ];
   }
+  // The outfit shop (v9 iteration 5, §2): five shirts, $50 each. The
+  // colour applies to Rico's torso, shoulders and upper arms only — the
+  // shared shirt material is never touched, so the crowd keeps its own
+  // colours. The previous custom shirt material is disposed.
+  let playerShirtMat = null;
+  function applyShirtColor(color) {
+    player.shirtColor = color;
+    if (playerShirtMat) playerShirtMat.dispose();
+    playerShirtMat = new THREE.MeshStandardMaterial({ color, roughness: 0.85, metalness: 0.1 });
+    playerMesh.traverse((o) => { if (o.userData && o.userData.part === 'shirt') o.material = playerShirtMat; });
+  }
+  function outfitMenuItems() {
+    return [
+      { key: 1, label: 'Kemeja Merah', price: 50, can: () => player.shirtColor !== 0xc23b2e, buy: () => { applyShirtColor(0xc23b2e); } },
+      { key: 2, label: 'Kemeja Biru', price: 50, can: () => player.shirtColor !== 0x2e6fc2, buy: () => { applyShirtColor(0x2e6fc2); } },
+      { key: 3, label: 'Kemeja Kuning', price: 50, can: () => player.shirtColor !== 0xe8c832, buy: () => { applyShirtColor(0xe8c832); } },
+      { key: 4, label: 'Kemeja Hijau', price: 50, can: () => player.shirtColor !== 0x3aa655, buy: () => { applyShirtColor(0x3aa655); } },
+      { key: 5, label: 'Kemeja Ungu', price: 50, can: () => player.shirtColor !== 0x8a5fc2, buy: () => { applyShirtColor(0x8a5fc2); } },
+    ];
+  }
+  // Influence makes the city cheaper: 3% off every shop price per level.
+  function shopPrice(price) {
+    return Math.max(1, Math.round(price * (1 - 0.03 * skillLevel('influence'))));
+  }
   function shopMenuItems() {
-    return shopKind === 'gun' ? gunMenuItems() : sprayMenuItems();
+    if (shopKind === 'gun') return gunMenuItems();
+    if (shopKind === 'outfit') return outfitMenuItems();
+    return sprayMenuItems();
   }
   // Which shop (if any) the player is standing at — within 8 m of the
   // door, on foot. The gun shop and the spray are 100+ m apart, so the
-  // two checks never both fire.
+  // two checks never both fire. v9 iteration 5 (§2): the outfit shop
+  // (Butik Neon) and the safehouse (a real landmark, heal + save).
   function nearShop() {
     const pp = playerPos();
     if (Math.hypot(pp.x - cfg.shops.gun.x, pp.z - cfg.shops.gun.z) < 8) return 'gun';
     if (Math.hypot(pp.x - cfg.shops.spray.x, pp.z - cfg.shops.spray.z) < 8) return 'spray';
+    if (Math.hypot(pp.x - cfg.shops.outfit.x, pp.z - cfg.shops.outfit.z) < 8) return 'outfit';
+    if (Math.hypot(pp.x - city.landmarks.safehouse.x, pp.z - city.landmarks.safehouse.z) < 10) return 'safehouse';
     return null;
   }
   function openShop(kind) {
+    // The safehouse is not a menu: E heals Rico to 100 and saves the
+    // game on the spot.
+    if (kind === 'safehouse') {
+      player.health = 100;
+      saveGame();
+      hud.showMessage('Safehouse — healed to 100, game saved.', 4);
+      audio.pickup();
+      return;
+    }
     shopKind = kind;
     state.screen = SCREEN_SHOP;
-    const shop = kind === 'gun' ? cfg.shops.gun : cfg.shops.spray;
+    const shop = cfg.shops[kind] || cfg.shops.spray;
     document.getElementById('shop-title').textContent = shop.name;
     renderShopItems();
     document.getElementById('screen-shop').style.display = 'flex';
@@ -1071,10 +1275,11 @@ export function createGame(canvas, seed) {
     const el = document.getElementById('shop-items');
     el.innerHTML = shopMenuItems().map((it) => {
       const ok = it.can();
-      const afford = player.cash >= it.price;
+      const price = shopPrice(it.price);
+      const afford = player.cash >= price;
       const cls = ok && afford ? '' : ' class="off"';
       const why = !ok ? ' — not available' : !afford ? ' — not enough cash' : '';
-      return `<div${cls}>${it.key} · ${it.label} — $${it.price}${why}</div>`;
+      return `<div${cls}>${it.key} · ${it.label} — $${price}${why}</div>`;
     }).join('');
     document.getElementById('shop-cash').textContent = `CASH $${Math.round(player.cash)}  ·  REP ${repPoints()}`;
   }
@@ -1088,19 +1293,46 @@ export function createGame(canvas, seed) {
     const it = shopMenuItems().find((i) => i.key === digit);
     if (!it) return;
     if (!it.can()) { hud.showMessage('Not available yet.', 2); return; }
-    if (player.cash < it.price) { hud.showMessage('Not enough cash.', 2); return; }
-    player.cash -= it.price;
+    const price = shopPrice(it.price);
+    if (player.cash < price) { hud.showMessage('Not enough cash.', 2); return; }
+    player.cash -= price;
     it.buy();
+    // v9 iteration 5 (§2): every purchase teaches Rico the streets —
+    // Influence grows and the next shop visit is cheaper.
+    addSkillXp('influence', 1);
     audio.pickup();
-    hud.showMessage(`Bought: ${it.label}`, 2);
+    hud.showMessage(`Bought: ${it.label} — $${price}`, 2);
     renderShopItems();
+  }
+
+  // Courier jobs (v9 iteration 5, §2): E at a gold pickup ring starts a
+  // timed delivery — the green ring marks the drop. Pay on arrival;
+  // REP-gated jobs stay locked until the rank is earned.
+  function nearDeliveryPickup() {
+    if (delivery) return -1;
+    const p = playerPos();
+    for (let i = 0; i < cfg.deliveries.length; i += 1) {
+      if (deliveriesDone[i]) continue;
+      const d = cfg.deliveries[i];
+      if (repPoints() < d.repReq) continue;
+      if (Math.hypot(p.x - d.pickup.x, p.z - d.pickup.z) < 4) return i;
+    }
+    return -1;
+  }
+  function startDelivery(i) {
+    const d = cfg.deliveries[i];
+    delivery = { idx: i, timeLeft: d.timeLimit };
+    hud.showMessage(`Delivery: ${d.name} — take it to the green ring in ${d.timeLimit}s!`, 4);
+    audio.pickup();
   }
 
   // A battered car is slower: condition 100 runs full speed, condition 0
   // runs at the floor (75%). The number on the HUD is honest about it.
+  // v9 iteration 5 (§1/§2): per-class top speed + the Driving skill.
   function carTopSpeed(car) {
     const c = clamp(car.condition ?? 100, 0, 100) / 100;
-    return cfg.car.maxSpeed * (cfg.car.conditionMinSpeed + (1 - cfg.car.conditionMinSpeed) * c);
+    const topMul = (car.topMul ?? 1) * (1 + 0.02 * skillLevel('driving'));
+    return cfg.car.maxSpeed * topMul * (cfg.car.conditionMinSpeed + (1 - cfg.car.conditionMinSpeed) * c);
   }
 
   function damageCar(car, amount) {
@@ -1122,11 +1354,59 @@ export function createGame(canvas, seed) {
     return best;
   }
 
+  // Witness (v9 iteration 5, §4): the nearest living civilian within
+  // 25 m of a crime (a kill or a carjacking) sees it and starts
+  // reporting — a gold "!" floats over their head for 3 s. If they are
+  // still alive after 3 s, the cops get called (+15 heat — one shot plus
+  // a witness is still 1 star, the iter-3 balance is kept). Kill them
+  // first and nobody talks.
+  let witness = null;
+  function startWitness(x, z) {
+    if (witness) return;
+    let best = null;
+    let bestD = 25;
+    for (const p of pedestrians) {
+      const d = Math.hypot(p.group.position.x - x, p.group.position.z - z);
+      if (d < bestD) { bestD = d; best = p; }
+    }
+    if (!best) return;
+    witness = { ped: best, timer: 3 };
+    markWitness(best);
+    hud.showMessage('A witness saw that! Silence them or the cops get called.', 3);
+  }
+  function clearWitnessState() {
+    if (!witness) return;
+    clearWitness(witness.ped);
+    witness = null;
+  }
+
+  // A stopped police cruiser close enough to steal (v9 iteration 5,
+  // §1): speed under 1, within enter range. A moving cruiser cannot be
+  // jacked — catch one parked or holding at a light.
+  function nearestStoppedPoliceCar() {
+    const p = playerPos();
+    let best = null;
+    let bestD = cfg.player.enterCarRange;
+    for (const car of wanted.policeCars) {
+      if (Math.abs(car.speed || 0) >= 1) continue;
+      const d = Math.hypot(car.group.position.x - p.x, car.group.position.z - p.z);
+      if (d < bestD) { bestD = d; best = car; }
+    }
+    return best;
+  }
+
   function enterCar(car) {
     const idx = traffic.indexOf(car);
-    if (idx >= 0) traffic.splice(idx, 1);
+    const wasTraffic = idx >= 0;
+    if (wasTraffic) traffic.splice(idx, 1);
     const pidx = parked.indexOf(car);
     if (pidx >= 0) parked.splice(pidx, 1);
+    // v9 iteration 5 (§1): stealing a police car is a crime — the
+    // cruiser leaves the wanted fleet (ensurePolice respawns the count)
+    // and the theft costs full heat.
+    const widx = wanted.policeCars.indexOf(car);
+    const wasPolice = widx >= 0;
+    if (wasPolice) wanted.policeCars.splice(widx, 1);
     car.route = null;
     car.parked = false;
     car.isPlayer = true;
@@ -1139,8 +1419,19 @@ export function createGame(canvas, seed) {
     // camera blends from the foot distance to the car distance instead
     // of snapping. updateCamera reads state.camBlend (see below).
     state.camBlend = 0;
-    if (car.isTarget) addHeat(wanted, cfg.police.stealHeat);
-    else addHeat(wanted, cfg.police.stealHeat * 0.6);
+    if (wasPolice) {
+      addHeatScaled(cfg.police.stealHeat);
+      hud.showMessage('You stole a police car — the whole force is coming!', 4);
+    } else if (car.isTarget) addHeatScaled(cfg.police.stealHeat);
+    else addHeatScaled(cfg.police.stealHeat * 0.6);
+    // v9 iteration 5 (§1/§4): carjacking a traffic car — the civilian
+    // flees on foot, and a nearby civilian may witness it.
+    if (wasTraffic) {
+      const away = { x: Math.sin(car.heading + Math.PI / 2), z: Math.cos(car.heading + Math.PI / 2) };
+      const flee = spawnFleeingPed(scene, car.group.position.x, car.group.position.z, away);
+      pedestrians.push(flee);
+      startWitness(car.group.position.x, car.group.position.z);
+    }
     audio.pickup();
     ensurePolice(wanted, scene, playerPos(), rng, { heading: car.heading, roadLines: city.roadLines });
   }
@@ -1153,10 +1444,21 @@ export function createGame(canvas, seed) {
     car.parked = true;
     car.driver.visible = false;
     parked.push(car);
-    const side = car.group.position.clone();
+    // v9 iteration 5 (§3): the exit spot must be on the same surface as
+    // the car — on the 4 m pier deck the side step can land in the sea.
+    // Try the other side, then the car's own spot.
+    const gy = groundYAt(car.group.position.x, car.group.position.z);
+    let side = car.group.position.clone();
     side.x += Math.cos(car.heading) * 2.5;
     side.z -= Math.sin(car.heading) * 2.5;
-    playerMesh.position.set(side.x, 0, side.z);
+    if (groundYAt(side.x, side.z) !== gy) {
+      side = car.group.position.clone();
+      side.x -= Math.cos(car.heading) * 2.5;
+      side.z += Math.sin(car.heading) * 2.5;
+    }
+    if (groundYAt(side.x, side.z) !== gy) side = car.group.position.clone();
+    playerMesh.position.set(side.x, gy, side.z);
+    player.groundY = gy;
     playerMesh.visible = true;
     player.heading = car.heading;
     player.inCar = false;
@@ -1315,10 +1617,14 @@ export function createGame(canvas, seed) {
       else {
         const idx = pedestrians.indexOf(best.obj);
         if (idx >= 0) {
+          // v9 iteration 5 (§4): a knife kill is a witnessed crime — if
+          // the victim was the witness, they cannot report.
+          if (witness && witness.ped === best.obj) clearWitnessState();
           scene.remove(best.obj.group);
           pedestrians.splice(idx, 1);
         }
-        addHeat(wanted, cfg.police.hitPedHeat);
+        addHeatScaled(cfg.police.hitPedHeat);
+        startWitness(origin.x, origin.z);
       }
     }
     audio.click();
@@ -1356,7 +1662,7 @@ export function createGame(canvas, seed) {
     muzzle.visible = true;
     if (!state.shotMode) setTimeout(() => { muzzle.visible = false; }, 90);
     audio.crash();
-    addHeat(wanted, cfg.police.shootHeat);
+    addHeatScaled(cfg.police.shootHeat);
   }
 
   // Rocket flight + blast. Deterministic damage: every enemy in the blast
@@ -1418,12 +1724,15 @@ export function createGame(canvas, seed) {
         for (let i = pedestrians.length - 1; i >= 0; i -= 1) {
           const p = pedestrians[i];
           if (Math.hypot(p.group.position.x - ex, p.group.position.z - ez) < R) {
+            // v9 iteration 5 (§4): a blast kill is a witnessed crime —
+            // if a victim was the witness, they cannot report.
+            if (witness && witness.ped === p) clearWitnessState();
             scene.remove(p.group);
             pedestrians.splice(i, 1);
             pedHit = true;
           }
         }
-        if (pedHit) addHeat(wanted, cfg.police.hitPedHeat);
+        if (pedHit) { addHeatScaled(cfg.police.hitPedHeat); startWitness(ex, ez); }
       }
     }
     if (blastT > 0) {
@@ -1498,15 +1807,21 @@ export function createGame(canvas, seed) {
       burst(end.x, 1.2, end.z, 8);
       if (hit.kind === 'enemy') {
         hurtEnemy(hit.obj, damage);
+        // v9 iteration 5 (§2): a hit is +1 Aim XP.
+        addSkillXp('aim', 1);
       } else if (hit.kind === 'barrel') {
         explodeBarrel(hit.obj);
       } else {
         const idx = pedestrians.indexOf(hit.obj);
         if (idx >= 0) {
+          // v9 iteration 5 (§4): a shot kill is a witnessed crime — if
+          // the victim was the witness, they cannot report.
+          if (witness && witness.ped === hit.obj) clearWitnessState();
           scene.remove(hit.obj.group);
           pedestrians.splice(idx, 1);
         }
-        addHeat(wanted, cfg.police.hitPedHeat);
+        addHeatScaled(cfg.police.hitPedHeat);
+        startWitness(origin.x, origin.z);
       }
     } else {
       burst(end.x, 1.2, end.z, 3);
@@ -1521,7 +1836,7 @@ export function createGame(canvas, seed) {
     // play it blinks out after 60 ms as before.
     if (!state.shotMode) setTimeout(() => { muzzle.visible = false; }, 60);
     audio.gunshot();
-    addHeat(wanted, cfg.police.shootHeat);
+    addHeatScaled(cfg.police.shootHeat);
     // Any gunshot scares the crowd — the threat is the shot itself, not
     // the weapon that fired it.
     state.lastShotAt = state.time;
@@ -1555,7 +1870,8 @@ export function createGame(canvas, seed) {
     }
     gun.spend();
     player.shootCooldown = gun.cooldown;
-    fireHitscan(gun.damage, gun.range, gun.perp);
+    // v9 iteration 5 (§2): Aim widens the hitscan tolerance, 5% a level.
+    fireHitscan(gun.damage, gun.range, gun.perp * (1 + 0.05 * skillLevel('aim')));
   }
 
   function showJobComplete(def, reward, elapsed, maxStars) {
@@ -1687,6 +2003,14 @@ export function createGame(canvas, seed) {
         repBonus: player.repBonus,
         racesWon: racesWon,
         stunts: stunts,
+        // v9 iteration 5: medals, per-race wins, landed ramps, courier
+        // jobs, skills and the shirt colour are saved too.
+        medals: medals.takenIndices(),
+        raceWins,
+        landedRamps: [...landedRamps],
+        deliveriesDone,
+        skills: player.skills,
+        shirtColor: player.shirtColor,
       };
       window.localStorage.setItem(cfg.saveKey, JSON.stringify(data));
       hud.showAutosave('SAVED');
@@ -1711,7 +2035,10 @@ export function createGame(canvas, seed) {
     player.armour = data.armour ?? 0;
     state.clockHour = data.clockHour ?? cfg.time.startHour;
     state.day = data.day ?? 1;
-    playerMesh.position.set(data.x ?? -112, 0, data.z ?? 60);
+    const sx = data.x ?? -112;
+    const sz = data.z ?? 60;
+    playerMesh.position.set(sx, groundYAt(sx, sz), sz);
+    player.groundY = groundYAt(sx, sz);
     player.heading = data.heading ?? 0;
     state.camYaw = player.heading;
     missions.index = Math.min(data.missionIndex ?? 0, MISSION_DEFS.length - 1);
@@ -1727,6 +2054,21 @@ export function createGame(canvas, seed) {
     player.repBonus = data.repBonus ?? 0;
     racesWon = data.racesWon ?? 0;
     stunts = data.stunts ?? 0;
+    // v9 iteration 5: medals, per-race wins, landed ramps, courier
+    // jobs, skills and the shirt colour. Old saves fall back to a fresh
+    // free-roam state.
+    if (Array.isArray(data.medals)) medals.restore(data.medals);
+    raceWins = Array.isArray(data.raceWins) && data.raceWins.length === 3 ? data.raceWins : [false, false, false];
+    raceIdx = -1;
+    landedRamps.clear();
+    if (Array.isArray(data.landedRamps)) for (const r of data.landedRamps) landedRamps.add(r);
+    deliveriesDone = Array.isArray(data.deliveriesDone) && data.deliveriesDone.length === 3 ? data.deliveriesDone : [false, false, false];
+    delivery = null;
+    player.skills = data.skills ?? { driving: 0, stamina: 0, aim: 0, stealth: 0, influence: 0, street: 0 };
+    player.driveDist = 0;
+    player.sprintT = 0;
+    if (data.shirtColor && data.shirtColor !== 0x2a7a8c) applyShirtColor(data.shirtColor);
+    else if (!data.shirtColor) player.shirtColor = 0x2a7a8c;
   }
 
   // One line of save summary for the title screen's Continue button, so
@@ -1767,10 +2109,26 @@ export function createGame(canvas, seed) {
       state.clockHour = cfg.time.startHour;
       state.day = 1;
       playerMesh.position.set(-112, 0, 60);
+      player.groundY = 0;
       player.heading = 0;
       state.camYaw = 0;
       missions.index = 0;
       packages.restore([]);
+      // v9 iteration 5: a New Game resets the whole free-roam state —
+      // medals, races, stunts, deliveries, skills and the shirt — so a
+      // fresh run starts clean instead of inheriting the old one.
+      medals.restore([]);
+      raceWins = [false, false, false];
+      raceIdx = -1;
+      racesWon = 0;
+      landedRamps.clear();
+      stunts = 0;
+      deliveriesDone = [false, false, false];
+      delivery = null;
+      player.skills = { driving: 0, stamina: 0, aim: 0, stealth: 0, influence: 0, street: 0 };
+      player.driveDist = 0;
+      player.sprintT = 0;
+      if (player.shirtColor !== 0x2a7a8c) applyShirtColor(0x2a7a8c);
     }
     missions.state = 'idle';
     missions.stage = 0;
@@ -1780,7 +2138,7 @@ export function createGame(canvas, seed) {
     player.prevBrake = input.brake();
     player.vy = 0;
     player.grounded = true;
-    playerMesh.position.y = 0;
+    playerMesh.position.y = player.groundY;
     state.screen = SCREEN_PLAY;
     audio.unlock();
     tryStartMission(missions.index);
@@ -1856,7 +2214,11 @@ export function createGame(canvas, seed) {
     sun.intensity = sunI;
     hemi.intensity = hemiI;
     ambient.intensity = ambI;
-    scene.fog.density = fogD;
+    // v9 iteration 5 (§5): the graphics preset scales the fog — LOW
+    // thickens it (fogMul 1.3), HIGH thins it (0.8). The title screen
+    // overrides the density afterwards, so this never fights the §6
+    // dusk haze.
+    scene.fog.density = fogD * (state.fogMul ?? 1);
     // The beachfront lamps glow with the dark.
     for (const l of city.streetlights) l.intensity = lampI;
     // The sea shader follows the sun (glint direction + colour).
@@ -1940,7 +2302,8 @@ export function createGame(canvas, seed) {
     const target = currentTarget(missions);
     const pp = playerPos();
     let objective = missionObjectiveText(missions);
-    if (state.race) objective = `STREET RACE — checkpoint ${state.race.cp}/3 · ${Math.ceil(state.race.timeLeft)}s left`;
+    if (state.race) objective = `STREET RACE — ${raceIdx >= 0 ? cfg.races[raceIdx].name : ''} — checkpoint ${state.race.cp}/3 · ${Math.ceil(state.race.timeLeft)}s left`;
+    if (delivery) objective = `DELIVERY — ${cfg.deliveries[delivery.idx].name} — ${Math.ceil(delivery.timeLeft)}s left`;
     if (missions.timer > 0) objective += `  ⏱ ${Math.ceil(missions.timer)}s`;
     if (!def) objective = 'All jobs done — Costa Fuego is yours.';
     // The dialogue bar shows the live conversation line, not the briefing:
@@ -1993,6 +2356,26 @@ export function createGame(canvas, seed) {
       stunts,
       // Two seasons (v9 iteration 3): odd days rain, even days dry.
       season: state.day % 2 === 1 ? 'MUSIM HUJAN' : 'MUSIM KEMARAU',
+      // v9 iteration 5 (§2/§3/§5): weekday (day 1 is Friday, like the
+      // story's first day), the street underfoot, the REP rank + progress
+      // to the next rank, medals, skill levels, the active delivery and
+      // the active race name — the HUD renders all of these.
+      weekday: ['FRI', 'SAT', 'SUN', 'MON', 'TUE', 'WED', 'THU'][(state.day - 1) % 7],
+      street: streetAt(pp.x, pp.z, cfg),
+      repRank: repRank(repPoints()).name,
+      repProgress: repProgress(),
+      medals: medals.count(),
+      medalsTotal: cfg.medals.count,
+      skills: {
+        driving: skillLevel('driving'),
+        stamina: skillLevel('stamina'),
+        aim: skillLevel('aim'),
+        stealth: skillLevel('stealth'),
+        influence: skillLevel('influence'),
+        street: skillLevel('street'),
+      },
+      delivery: delivery ? { name: cfg.deliveries[delivery.idx].name, timeLeft: Math.ceil(delivery.timeLeft) } : null,
+      raceName: state.race && raceIdx >= 0 ? cfg.races[raceIdx].name : null,
     };
   }
 
@@ -2045,6 +2428,75 @@ export function createGame(canvas, seed) {
     camera.lookAt(fx + Math.sin(state.camYaw) * 3, 1.4, fz + Math.cos(state.camYaw) * 3);
   }
 
+  // Graphics presets + settings sliders (v9 iteration 5, §5): every
+  // control changes the live game. A preset sets all values at once;
+  // moving any slider switches the preset to CUSTOM. The probe asserts
+  // the real effects (bloom on/off, traffic count, camera far, volumes).
+  function applySettings() {
+    const s = state.settings;
+    const p = cfg.presets[s.preset] || cfg.presets.MED;
+    const pr = Math.min(window.devicePixelRatio || 1, p.pixelRatio);
+    renderer.setPixelRatio(pr);
+    composer.setPixelRatio(pr);
+    composer.setSize(window.innerWidth, window.innerHeight);
+    bloomPass.enabled = p.bloom;
+    // Toggling shadows at runtime needs a material recompile, or the
+    // change never shows — force it once, on change only.
+    if (renderer.shadowMap.enabled !== p.shadows) {
+      renderer.shadowMap.enabled = p.shadows;
+      scene.traverse((o) => {
+        if (!o.material) return;
+        const ms = Array.isArray(o.material) ? o.material : [o.material];
+        for (const m of ms) m.needsUpdate = true;
+      });
+    }
+    const size = p.shadowSize;
+    if (sun.shadow.mapSize.x !== size) {
+      sun.shadow.mapSize.set(size, size);
+      if (sun.shadow.map) { sun.shadow.map.dispose(); sun.shadow.map = null; }
+    }
+    camera.far = s.viewDistance;
+    camera.updateProjectionMatrix();
+    state.fogMul = p.fogMul;
+    // Traffic: add or remove live cars to match the slider.
+    while (traffic.length < s.traffic) traffic.push(spawnTrafficCar(scene, rng, cfg, city.roadLines, city.half));
+    while (traffic.length > s.traffic) {
+      const car = traffic.pop();
+      scene.remove(car.group);
+      disposeCarMesh(car.group);
+    }
+    // Crowd: add or remove walking peds (vendors are never touched).
+    while (walkerCount < s.crowd) {
+      pedestrians.splice(walkerCount, 0, spawnPedestrian(scene, rng, cfg, city.blockCenters));
+      walkerCount += 1;
+    }
+    while (walkerCount > s.crowd) {
+      const ped = pedestrians[walkerCount - 1];
+      if (witness && witness.ped === ped) clearWitnessState();
+      scene.remove(ped.group);
+      pedestrians.splice(walkerCount - 1, 1);
+      walkerCount -= 1;
+    }
+    audio.setVolumes({ master: s.master, music: s.music, effects: s.effects, engine: s.engine });
+  }
+
+  // The pause screen's skill list (v9 iteration 5, §2): level + XP
+  // progress for all six skills, refreshed every time the pause opens.
+  function renderPauseSkills() {
+    const el = document.getElementById('pause-skills');
+    if (!el) return;
+    const names = { driving: 'Driving', stamina: 'Stamina', aim: 'Aim', stealth: 'Stealth', influence: 'Influence', street: 'Street Sense' };
+    el.innerHTML = Object.keys(names).map((k) => {
+      const lvl = skillLevel(k);
+      const xp = player.skills[k] || 0;
+      const maxLvl = cfg.skillLevels.length - 1;
+      const cur = cfg.skillLevels[lvl];
+      const next = cfg.skillLevels[Math.min(lvl + 1, maxLvl)];
+      const pct = lvl >= maxLvl ? 100 : Math.round(((xp - cur) / (next - cur)) * 100);
+      return `<div>${names[k]} — LV ${lvl} · ${pct}%</div>`;
+    }).join('');
+  }
+
   function step(dt) {
     state.time += dt;
     state.clockHour += (dt / cfg.time.dayLength) * 24;
@@ -2066,8 +2518,11 @@ export function createGame(canvas, seed) {
     const locked = input.takePointer();
     const drag = input.takeDrag();
     const look = { x: locked.x + drag.x, y: locked.y + drag.y };
-    state.camYaw -= look.x * cfg.camera.lookSpeed;
-    state.camPitch = clamp(state.camPitch + look.y * 0.002, cfg.camera.pitchMin, cfg.camera.pitchMax);
+    // v9 iteration 5 (§5): the mouse-sensitivity slider scales both
+    // axes of the look input.
+    const sens = state.settings?.mouseSens ?? 1;
+    state.camYaw -= look.x * cfg.camera.lookSpeed * sens;
+    state.camPitch = clamp(state.camPitch + look.y * 0.002 * sens, cfg.camera.pitchMin, cfg.camera.pitchMax);
     if (look.x !== 0 || look.y !== 0) state.lastAimTime = state.time;
 
     const actions = takePendingActions();
@@ -2086,12 +2541,18 @@ export function createGame(canvas, seed) {
       else {
         // v9 iteration 4: E opens a shop when on foot near its door —
         // the car check runs second, so a parked car by the shop never
-        // blocks the door.
+        // blocks the door. v9 iteration 5: a delivery pickup and the
+        // safehouse come before the car too; a stopped police cruiser
+        // can be stolen like any other car.
         const shop = nearShop();
         if (shop) openShop(shop);
         else {
-          const car = nearestCar(cfg.player.enterCarRange);
-          if (car) enterCar(car);
+          const del = nearDeliveryPickup();
+          if (del >= 0) startDelivery(del);
+          else {
+            const car = nearestCar(cfg.player.enterCarRange) || nearestStoppedPoliceCar();
+            if (car) enterCar(car);
+          }
         }
       }
     }
@@ -2122,12 +2583,15 @@ export function createGame(canvas, seed) {
       const top = carTopSpeed(car);
       const fwd = input.forward() ? 1 : input.back() ? -1 : 0;
       const steer = (input.left() ? 1 : 0) - (input.right() ? 1 : 0);
-      if (fwd > 0) car.speed += cfg.car.accel * dt * (input.run() ? 1.35 : 1);
+      // v9 iteration 5 (§1/§2): per-class handling — acceleration,
+      // steering and grip come from the car's spec, and Driving XP
+      // raises every class's top speed (see carTopSpeed).
+      if (fwd > 0) car.speed += cfg.car.accel * (car.accelMul ?? 1) * dt * (input.run() ? 1.35 : 1);
       else if (fwd < 0) {
         if (car.speed > 0.5) car.speed -= cfg.car.brake * dt;
         else car.speed -= cfg.car.reverseAccel * dt;
       } else {
-        car.speed -= Math.sign(car.speed) * cfg.car.grip * dt * 0.6;
+        car.speed -= Math.sign(car.speed) * cfg.car.grip * (car.gripMul ?? 1) * dt * 0.6;
         if (Math.abs(car.speed) < 0.3) car.speed = 0;
       }
       if (input.brake()) {
@@ -2144,7 +2608,7 @@ export function createGame(canvas, seed) {
       const prevX = car.group.position.x;
       const prevZ = car.group.position.z;
       const drifting = input.brake();
-      car.heading += steer * cfg.car.steer * dt * clamp(Math.abs(car.speed) / 8, 0, 1) * Math.sign(car.speed || 1) * (drifting ? 1.9 : 1);
+      car.heading += steer * cfg.car.steer * (car.steerMul ?? 1) * dt * clamp(Math.abs(car.speed) / 8, 0, 1) * Math.sign(car.speed || 1) * (drifting ? 1.9 : 1);
       car.group.rotation.y = car.heading;
       // Body roll on cornering (more while drifting) + pitch on
       // accel/brake: the car leans into the turn and squats/dips with
@@ -2160,6 +2624,13 @@ export function createGame(canvas, seed) {
         car.group.position.z = prevZ;
         car.speed *= 0.4;
       }
+      // v9 iteration 5 (§2/§3): miles behind the wheel teach Driving —
+      // +1 XP per 100 m. And the pier deck, the causeway and the island
+      // sit 1.15 m up, so the car rides their surface, not y = 0 (the
+      // airborne block below owns y while the car is flying).
+      player.driveDist += Math.abs(car.speed) * dt;
+      if (player.driveDist >= 100) { player.driveDist -= 100; addSkillXp('driving', 1); }
+      if (state.carAir === 0) car.group.position.y = groundYAt(car.group.position.x, car.group.position.z);
       car.wheelSpin += car.speed * dt * 2;
       spinWheels(car);
       steerWheels(car, steer * 0.35);
@@ -2215,31 +2686,45 @@ export function createGame(canvas, seed) {
       // Stunt ramps (v9 iteration 4): hit one over 15 m/s and the car
       // flies. Air time over 0.6 s on landing pays $100 + 1 REP, with a
       // brief slow-mo while airborne.
-      for (const r of city.ramps) {
+      for (let ri = 0; ri < city.ramps.length; ri += 1) {
+        const r = city.ramps[ri];
         const rd = Math.hypot(r.x - car.group.position.x, r.z - car.group.position.z);
         if (rd < 3.5 && Math.abs(car.speed) > 15 && state.carAir === 0) {
           state.carAir = 6 + Math.abs(car.speed) * 0.18;
           state.slowmo = 0.6;
           state.airStart = state.time;
+          // The ramp INDEX (not the object) — indices survive a save
+          // round-trip, object identity does not.
+          state.airRamp = ri;
           audio.pickup();
         }
       }
       // Airborne physics: gravity pulls the car back down; landing
-      // settles it exactly at y = 0.
+      // settles it exactly on the ground underfoot (y = 0 on the roads,
+      // 1.15 on the pier deck, the causeway and the island).
       if (state.carAir !== 0) {
         state.carAir -= 18 * dt;
         car.group.position.y += state.carAir * dt;
-        if (car.group.position.y <= 0) {
-          car.group.position.y = 0;
+        const gy = groundYAt(car.group.position.x, car.group.position.z);
+        if (car.group.position.y <= gy) {
+          car.group.position.y = gy;
           const airtime = state.time - (state.airStart || 0);
           if (airtime > 0.6) {
+            // v9 iteration 5 (§2): the first landing on a ramp pays
+            // $500, repeats pay $50. Each ramp pays its first prize
+            // once — the set is saved.
+            const rampIdx = state.airRamp;
+            const first = rampIdx != null && !landedRamps.has(rampIdx);
+            if (rampIdx != null) landedRamps.add(rampIdx);
+            const prize = first ? (cfg.stunts.firstPrize ?? 500) : (cfg.stunts.prize ?? 50);
             stunts += 1;
             player.repBonus += cfg.player.repPerStunt;
-            player.cash += cfg.stunts.prize;
-            hud.showMessage(`Stunt jump! +$${cfg.stunts.prize} · +${cfg.player.repPerStunt} REP`, 4);
+            player.cash += prize;
+            hud.showMessage(`Stunt jump! +$${prize} · +${cfg.player.repPerStunt} REP`, 4);
             audio.missionDone();
             saveGame();
           }
+          state.airRamp = null;
           state.carAir = 0;
         }
       }
@@ -2248,9 +2733,14 @@ export function createGame(canvas, seed) {
         const ped = pedestrians[i];
         const d = Math.hypot(ped.group.position.x - car.group.position.x, ped.group.position.z - car.group.position.z);
         if (d < 2.2 && Math.abs(car.speed) > 3) {
+          // v9 iteration 5 (§4): a run-over is a witnessed crime — if
+          // the victim was the witness, they cannot report; another
+          // nearby civilian may.
+          if (witness && witness.ped === ped) clearWitnessState();
           scene.remove(ped.group);
           pedestrians.splice(i, 1);
-          addHeat(wanted, cfg.police.hitPedHeat);
+          addHeatScaled(cfg.police.hitPedHeat);
+          startWitness(car.group.position.x, car.group.position.z);
           audio.crash();
           state.shake = 0.6;
           car.speed *= 0.7;
@@ -2259,7 +2749,7 @@ export function createGame(canvas, seed) {
       for (const other of [...traffic, ...parked, ...wanted.roadblocks]) {
         const d = Math.hypot(other.group.position.x - car.group.position.x, other.group.position.z - car.group.position.z);
         if (d < 3.4 && Math.abs(car.speed) > 4) {
-          addHeat(wanted, cfg.police.hitCarHeat);
+          addHeatScaled(cfg.police.hitCarHeat);
           audio.crash();
           state.shake = 0.5;
           car.speed *= 0.5;
@@ -2280,10 +2770,51 @@ export function createGame(canvas, seed) {
         audio.missionDone();
         hud.showMessage(`Respray at Taller Marla — $${cfg.economy.resprayCost}. New paint, no heat.`, 5);
       }
+      // Car on fire (v9 iteration 5, §1): condition under 25 smokes
+      // and warns once; at 0 the car bursts — Rico takes 50 damage and
+      // bails out on the spot. The wreck is removed from the scene (it
+      // never joins `parked`), its mesh is disposed, and a repair or a
+      // respray resets the warning.
+      const cond = car.condition ?? 100;
+      if (cond < 25 && cond > 0) {
+        if (!car.fireWarned) { car.fireWarned = true; hud.showMessage('Your car is on fire — get to a spray shop!', 4); }
+        state.fireT = (state.fireT || 0) - dt;
+        if (state.fireT <= 0) { state.fireT = 0.4; puffSmoke(car.group.position.x, 1.2, car.group.position.z); }
+      }
+      if (cond <= 0) {
+        burst(car.group.position.x, 1.2, car.group.position.z, 16);
+        audio.positionalShot(car.group.position.x, 1.2, car.group.position.z, 'blast');
+        audio.crash();
+        const wreck = car;
+        const gy = groundYAt(wreck.group.position.x, wreck.group.position.z);
+        let side = wreck.group.position.clone();
+        side.x += Math.cos(wreck.heading) * 2.5;
+        side.z -= Math.sin(wreck.heading) * 2.5;
+        if (groundYAt(side.x, side.z) !== gy) {
+          side = wreck.group.position.clone();
+          side.x -= Math.cos(wreck.heading) * 2.5;
+          side.z += Math.sin(wreck.heading) * 2.5;
+        }
+        if (groundYAt(side.x, side.z) !== gy) side = wreck.group.position.clone();
+        wreck.isPlayer = false;
+        wreck.speed = 0;
+        playerMesh.position.set(side.x, gy, side.z);
+        player.groundY = gy;
+        playerMesh.visible = true;
+        player.heading = wreck.heading;
+        player.inCar = false;
+        player.car = null;
+        state.camBlend = 0;
+        scene.remove(wreck.group);
+        disposeCarMesh(wreck.group);
+        damagePlayer(50, 'fire');
+        hud.showMessage('Your car blew up!', 4);
+      }
     } else {
       // On foot.
       const run = input.run();
-      const speed = run ? cfg.player.runSpeed : cfg.player.walkSpeed;
+      // v9 iteration 5 (§2): Stamina makes sprinting faster, 3% a level.
+      const speed = (run ? cfg.player.runSpeed : cfg.player.walkSpeed) * (run ? 1 + 0.03 * skillLevel('stamina') : 1);
       let mx = 0;
       let mz = 0;
       if (input.forward()) { mx += Math.sin(state.camYaw); mz += Math.cos(state.camYaw); }
@@ -2301,9 +2832,29 @@ export function createGame(canvas, seed) {
         mz /= len;
         playerMesh.position.x += mx * speed * dt;
         playerMesh.position.z += mz * speed * dt;
+        // v9 iteration 5 (§3): the pier deck, the causeway and the
+        // island sit 1.15 m up — Rico walks their surface. Past the
+        // beach (x > 172) only the deck corridor (z 98–102) and the
+        // island are walkable; stepping off a raised edge is blocked,
+        // so Rico can never strand himself in the sea.
+        const nx = playerMesh.position.x;
+        const nz = playerMesh.position.z;
+        const onCorridor = nz >= 98 && nz <= 102 && nx <= 275;
+        const onIsland = nx >= 222 && nx <= 275 && nz >= 70 && nz <= 130;
+        if (nx > 172 && !onCorridor && !onIsland) {
+          playerMesh.position.x -= mx * speed * dt;
+          playerMesh.position.z -= mz * speed * dt;
+        } else {
+          player.groundY = groundYAt(nx, nz);
+        }
         player.heading = Math.atan2(mx, mz);
         playerMesh.rotation.y = player.heading;
         player.bob += dt * (run ? 14 : 9);
+        // v9 iteration 5 (§2): 10 s of sprinting is +1 Stamina XP.
+        if (run) {
+          player.sprintT += dt;
+          if (player.sprintT >= 10) { player.sprintT -= 10; addSkillXp('stamina', 1); }
+        }
         // Walk cycle (v9 iteration 3): legs and arms swing as a pendulum
         // around the hip/shoulder pivots, in step with movement speed.
         // The mesh y NEVER lifts while grounded — feet stay planted; the
@@ -2328,10 +2879,14 @@ export function createGame(canvas, seed) {
           joints.rig.rotation.x += (0 - joints.rig.rotation.x) * k;
         }
       }
+      // v9 iteration 5 (§3): while grounded Rico's feet stay on the
+      // surface underfoot — walking off the deck drops him to the beach,
+      // walking on lifts him onto the deck.
+      if (player.grounded) playerMesh.position.y = player.groundY;
       // Jump (v9 iteration 3): Space on foot only — Space stays the brake
       // in a car. Edge-triggered (a fresh press), so holding Space does
       // not bunny-hop; no double-jump (grounded only). One velocity, one
-      // gravity; landing is exactly y = 0.
+      // gravity; landing is exactly at the ground underfoot.
       const brake = input.brake();
       if (brake && !player.prevBrake && player.grounded) {
         player.vy = cfg.player.jumpSpeed;
@@ -2341,8 +2896,8 @@ export function createGame(canvas, seed) {
       if (!player.grounded) {
         player.vy -= cfg.player.jumpGravity * dt;
         playerMesh.position.y += player.vy * dt;
-        if (playerMesh.position.y <= 0) {
-          playerMesh.position.y = 0;
+        if (playerMesh.position.y <= player.groundY) {
+          playerMesh.position.y = player.groundY;
           player.vy = 0;
           player.grounded = true;
         }
@@ -2355,9 +2910,11 @@ export function createGame(canvas, seed) {
           joints.rig.rotation.x = 0.06;
         }
       } else {
-        playerMesh.position.y = 0;
+        playerMesh.position.y = player.groundY;
       }
-      playerMesh.position.x = clamp(playerMesh.position.x, -150, 165);
+      // v9 iteration 5 (§3): the east clamp reaches the island (x 275) —
+      // the sea is kept out by the edge block above, not by this clamp.
+      playerMesh.position.x = clamp(playerMesh.position.x, -150, 275);
       playerMesh.position.z = clamp(playerMesh.position.z, -150, 150);
       audio.setEngine(0, false);
     }
@@ -2372,25 +2929,66 @@ export function createGame(canvas, seed) {
       saveGame();
     }
 
-    // Street race (v9 iteration 4): drive through the start line on the
-    // garage road and the clock starts — two checkpoints, then the
-    // finish, 75 s, $300 + 5 REP. The rings show the way; the HUD
-    // objective shows the clock.
+    // Medals (v9 iteration 5, §2): 24 gold coins across the city, the
+    // pier and the island — $100 each, $5,000 for the full set. They
+    // spin in the world (see step()) and are saved.
+    const medal = medals.collect(pp0.x, pp0.z);
+    if (medal.gained > 0) {
+      player.cash += medal.gained;
+      addSkillXp('street', 1);
+      audio.packageFound();
+      if (medal.bonus > 0) hud.showMessage(`ALL 24 MEDALS! +$${medal.bonus} bonus!`, 5);
+      else hud.showMessage(`Medal found — +$${medal.gained}! (${medals.count()}/${cfg.medals.count})`, 4);
+      saveGame();
+    }
+
+    // Street races (v9 iteration 5, §2): three of them, each with its
+    // own route, REP gate, prize and time limit. Drive through the
+    // start line and the clock starts — two checkpoints, then the
+    // finish. The rings show the way; the HUD objective shows the
+    // clock. A race that was already won never re-triggers, and a
+    // locked race says so once per approach instead of starting.
     if (player.inCar && player.car) {
       const cp = player.car.group.position;
-      const targets = [cfg.race.start, ...cfg.race.checkpoints, cfg.race.finish];
-      const startDist = Math.hypot(cp.x - cfg.race.start.x, cp.z - cfg.race.start.z);
+      const race = raceIdx >= 0 ? cfg.races[raceIdx] : null;
+      const targets = race ? [race.start, ...race.checkpoints, race.finish] : null;
       if (!state.race) {
-        // Re-arm the start line once the car has driven clear of it.
-        if (startDist > 8) state.raceArmed = true;
-        if (state.raceArmed && startDist < 6) {
-          state.race = { cp: 1, timeLeft: cfg.race.timeLimit };
-          raceRings.forEach((r, i) => {
-            r.visible = true;
-            r.material.color.setHex(i === 0 ? 0x22ff44 : i === 1 ? 0xffd23e : 0x555555);
-          });
-          hud.showMessage('Street race! Hit the gold rings — 75 s, $300 + 5 REP.', 4);
-          audio.pickup();
+        if (raceIdx < 0) {
+          // Pick the nearest unwon, unlocked race whose start line the
+          // car is sitting on.
+          let started = false;
+          for (let i = 0; i < cfg.races.length; i += 1) {
+            if (raceWins[i]) continue;
+            const r = cfg.races[i];
+            if (repPoints() < r.repReq) continue;
+            if (Math.hypot(cp.x - r.start.x, cp.z - r.start.z) < 6) { raceIdx = i; started = true; break; }
+          }
+          if (started) {
+            const r = cfg.races[raceIdx];
+            setRaceRings(r);
+            raceRings.forEach((ring, i) => {
+              ring.visible = true;
+              ring.material.color.setHex(i === 0 ? 0x22ff44 : i === 1 ? 0xffd23e : 0x555555);
+            });
+            state.race = { cp: 1, timeLeft: r.timeLimit };
+            hud.showMessage(`${r.name}! Hit the gold rings — ${r.timeLimit} s, $${r.prize} + ${r.rep} REP.`, 4);
+            audio.pickup();
+          } else if (state.raceArmed) {
+            const locked = cfg.races.find((r, i) => !raceWins[i] && repPoints() < r.repReq && Math.hypot(cp.x - r.start.x, cp.z - r.start.z) < 6);
+            if (locked) {
+              hud.showMessage(`${locked.name} needs REP ${locked.repReq} — earn more REP first.`, 3);
+              state.raceArmed = false;
+            }
+          }
+          // Re-arm the locked message once the car is clear of every
+          // start line.
+          const nearAny = cfg.races.some((r) => Math.hypot(cp.x - r.start.x, cp.z - r.start.z) < 8);
+          if (!nearAny) state.raceArmed = true;
+        } else {
+          // A race just ended on this start line — re-arm once the car
+          // has driven clear of it, so it cannot re-trigger in place.
+          const r = cfg.races[raceIdx];
+          if (Math.hypot(cp.x - r.start.x, cp.z - r.start.z) > 8) raceIdx = -1;
         }
       } else {
         state.race.timeLeft -= dt;
@@ -2401,15 +2999,16 @@ export function createGame(canvas, seed) {
             r.material.color.setHex(i === state.race.cp ? 0xffd23e : i < state.race.cp ? 0x22ff44 : 0x555555);
           });
           if (state.race.cp >= targets.length) {
+            const r = cfg.races[raceIdx];
+            raceWins[raceIdx] = true;
             racesWon += 1;
-            player.repBonus += cfg.player.repPerRace;
-            player.cash += cfg.race.prize;
-            hud.showMessage(`Race won! +$${cfg.race.prize} · +${cfg.player.repPerRace} REP`, 5);
+            player.repBonus += r.rep;
+            player.cash += r.prize;
+            hud.showMessage(`Race won! +$${r.prize} · +${r.rep} REP`, 5);
             audio.missionDone();
             saveGame();
             state.race = null;
-            state.raceArmed = false;
-            raceRings.forEach((r) => { r.visible = false; });
+            raceRings.forEach((ring) => { ring.visible = false; });
           } else {
             audio.pickup();
           }
@@ -2418,11 +3017,43 @@ export function createGame(canvas, seed) {
           hud.showMessage('Race failed — out of time.', 3);
           audio.fail();
           state.race = null;
-          state.raceArmed = false;
           raceRings.forEach((r) => { r.visible = false; });
         }
       }
     }
+
+    // Courier delivery (v9 iteration 5, §2): the timer runs down while
+    // the green ring marks the drop. Arrive in time for the pay + REP;
+    // run out of time and the job is gone (it can be picked up again).
+    if (delivery) {
+      const d = cfg.deliveries[delivery.idx];
+      delivery.timeLeft -= dt;
+      deliveryDropRing.position.set(d.drop.x, 0.1, d.drop.z);
+      deliveryDropRing.visible = true;
+      const p = playerPos();
+      if (Math.hypot(p.x - d.drop.x, p.z - d.drop.z) < 5) {
+        deliveriesDone[delivery.idx] = true;
+        player.cash += d.prize;
+        player.repBonus += cfg.player.repPerDelivery;
+        addSkillXp('street', 1);
+        hud.showMessage(`Delivery done! +$${d.prize} · +${cfg.player.repPerDelivery} REP`, 4);
+        audio.missionDone();
+        saveGame();
+        delivery = null;
+        deliveryDropRing.visible = false;
+      } else if (delivery.timeLeft <= 0) {
+        hud.showMessage('Delivery failed — out of time.', 3);
+        audio.fail();
+        delivery = null;
+        deliveryDropRing.visible = false;
+      }
+    }
+    // Delivery pickup rings: gold while the job is available (unwon and
+    // REP-unlocked), hidden once done, locked, or while another delivery
+    // is running.
+    deliveryPickupRings.forEach((ring, i) => {
+      ring.visible = !delivery && !deliveriesDone[i] && repPoints() >= cfg.deliveries[i].repReq;
+    });
 
     // Traffic, pedestrians, enemies.
     for (const car of traffic) updateTrafficCar(car, dt, allCars(), cfg, pedestrians);
@@ -2468,7 +3099,7 @@ export function createGame(canvas, seed) {
       } else {
         damagePlayer(cfg.police.ramDamage, 'ram');
       }
-    }, () => damagePlayer(999, 'arrest'), rng, { cars: allCars(), pedestrians });
+    }, () => damagePlayer(999, 'arrest'), rng, { cars: allCars(), pedestrians, inVisionCone: inVisionCone(pp.x, pp.z) });
     // v9 iteration 3: say it once when the grace window opens — the
     // player just fired their first shot and the police are on their way.
     if (wanted.graceTimer > 0 && prevGrace <= 0) {
@@ -2481,8 +3112,35 @@ export function createGame(canvas, seed) {
       hud.showMessage('★ Wanted Level Evaded! ★', 4);
       wanted.cooldown = cfg.evadeCooldown;
       audio.missionDone();
+      // v9 iteration 5 (§2): losing the cops is +1 Stealth XP.
+      addSkillXp('stealth', 1);
     }
     prevStars = wanted.stars;
+    // v9 iteration 5 (§4): the witness reports after 3 s — unless they
+    // were silenced first (clearWitnessState, called at every kill).
+    if (witness) {
+      witness.timer -= dt;
+      if (witness.timer <= 0) {
+        clearWitnessState();
+        addHeatScaled(cfg.police.witnessHeat);
+        hud.showMessage('A witness called the cops!', 4);
+      }
+    }
+    // v9 iteration 5 (§3): the island gate opens as Rico approaches.
+    if (city.islandGate) {
+      const gd = Math.hypot(pp.x - 209, pp.z - 100);
+      const target = gd < 12 ? 1 : 0;
+      city.islandGate.open += (target - city.islandGate.open) * Math.min(1, dt * 3);
+      city.islandGate.beam.position.y = 1.0 + city.islandGate.open * 2.2;
+    }
+    // v9 iteration 5 (§2/§3): medals spin, and every car in the world
+    // rides the ground under it (the pier deck, the causeway and the
+    // island sit 1.15 m up).
+    medals.spin(state.time);
+    for (const car of allCars()) {
+      if (car.isPlayer) continue;
+      car.group.position.y = groundYAt(car.group.position.x, car.group.position.z);
+    }
     // v9 iteration 4: the siren rides on the nearest cruiser (positional
     // audio — it swells as the cops close in); the global siren is the
     // fallback when positional audio is unavailable or no cruiser exists.
@@ -2677,15 +3335,28 @@ export function createGame(canvas, seed) {
       updateCamera(dt, false);
     } else if (state.screen === SCREEN_TITLE) {
       state.time += dt;
-      state.clockHour += (dt / cfg.time.dayLength) * 24;
+      // v9 iteration 5 (§6, user title template): the title holds the
+      // dusk band (17:30–19:30) so the panorama always matches the
+      // template's dusk skyline — the clock drifts slowly inside the
+      // band instead of running into the night. The fog override runs
+      // AFTER updateDaylight (which owns the fog) so the title keeps its
+      // dusk haze; entering play resets the fog via updateDaylight in
+      // step().
+      state.clockHour = 17.5 + ((state.time * 0.05) % 2);
       updateDaylight();
       updateLights(dt);
       updateRain(dt);
       updateLightHeads();
-      // Slow orbit around the tower behind the title screen.
-      const a = state.time * 0.05;
-      camera.position.set(Math.sin(a) * 90, 42, Math.cos(a) * 90);
-      camera.lookAt(0, 20, 0);
+      scene.fog.color.setHex(0x3a1c38);
+      scene.fog.density = 0.0045;
+      // Slow orbit around the dense skyline — radius 115, height ~38,
+      // the look target shifted left of centre so the left panel has
+      // room. At radius 115 the camera clears the tallest building on
+      // the orbit (~22 m) by 16 m, and the view crosses the skyline
+      // toward Fuego Tower — never a flat rooftop slab.
+      const angle = state.time * 0.06 + 0.65;
+      camera.position.set(Math.cos(angle) * 115, 38 + Math.sin(state.time * 0.25) * 3, Math.sin(angle) * 115);
+      camera.lookAt(-14, 24, 0);
       updateHeli(dt);
       for (const car of traffic) updateTrafficCar(car, dt, allCars(), cfg, pedestrians);
     } else if (state.screen === SCREEN_OVER) {
@@ -2980,16 +3651,17 @@ export function createGame(canvas, seed) {
       // report how many per-instance resources the factory owns for it,
       // dispose them, and confirm the list is empty afterwards. A count
       // of 0 for a kind would mean its fresh resources were never tagged.
-      // Expected: Furia 2 (head/tail mats), Interceptor 10 (+2 door
-      // geos/mats, +2 light-bar geos/mats), Lobo Van 6 (+band mat, 2 band
-      // geos, roof-sign mat), Solano Cabrio 4 (+shield geo/mat).
+      // Counts are MEASURED here (the v9 iteration 5 factory builds a
+      // different set per class) — the probe asserts ownedBefore > 0 and
+      // ownedAfter === 0 for every class, never a stale number.
       disposeCheck: () => {
         const out = {};
-        for (const [name, color, isPolice] of [['Furia Sport', 0x8a5fc2, false], ['Interceptor', 0x1a1a22, true], ['Lobo Van', 0xd8d8d8, false], ['Solano Cabrio', 0xe8c832, false]]) {
-          const m = makeCarMesh(color, isPolice);
+        const list = [...SPECS, { name: 'Interceptor', color: 0x1a1a22 }];
+        for (const s of list) {
+          const m = makeCarMesh(s.color, s.name === 'Interceptor');
           const before = (m.group.userData.owned || []).length;
           disposeCarMesh(m.group);
-          out[name] = { ownedBefore: before, ownedAfter: (m.group.userData.owned || []).length };
+          out[s.name] = { ownedBefore: before, ownedAfter: (m.group.userData.owned || []).length };
         }
         return out;
       },
@@ -3103,7 +3775,11 @@ export function createGame(canvas, seed) {
         saveGame();
         const raw = window.localStorage.getItem(cfg.saveKey);
         const data = raw ? JSON.parse(raw) : null;
-        return data ? { cash: data.cash, ammo: data.ammo, owned: data.owned, repBonus: data.repBonus } : null;
+        return data ? {
+          cash: data.cash, ammo: data.ammo, owned: data.owned, repBonus: data.repBonus,
+          medals: data.medals, raceWins: data.raceWins, landedRamps: data.landedRamps,
+          deliveriesDone: data.deliveriesDone, skills: data.skills, shirtColor: data.shirtColor,
+        } : null;
       },
       meshCount: () => {
         let meshes = 0;
@@ -3156,14 +3832,134 @@ export function createGame(canvas, seed) {
         return { inCar: player.inCar, name: car.name };
       },
       setCamYawDirect: (v) => { state.camYaw = v; return state.camYaw; },
+      // v9 iteration 5 hooks: §0 city/roads, §1 cars, §2 progression,
+      // §3 world, §4 witness/evasion, §5 save + presets. All read live
+      // state, never source code.
+      medals: () => ({ count: medals.count(), total: cfg.medals.count, taken: medals.takenIndices(), spots: medals.list.map((m) => ({ x: m.x, z: m.z, taken: m.taken })) }),
+      races: () => ({ wins: [...raceWins], won: racesWon, idx: raceIdx, list: cfg.races.map((r) => ({ name: r.name, rep: r.rep, prize: r.prize })) }),
+      stunts: () => ({ landed: [...landedRamps], count: stunts, total: cfg.stunts.ramps.length, ramps: cfg.stunts.ramps.map((r) => ({ x: r.x, z: r.z, axis: r.axis })) }),
+      deliveries: () => ({ done: [...deliveriesDone], active: delivery ? { idx: delivery.idx, timeLeft: Math.round(delivery.timeLeft * 10) / 10 } : null }),
+      skills: () => ({
+        xp: { ...player.skills },
+        levels: {
+          driving: skillLevel('driving'), stamina: skillLevel('stamina'), aim: skillLevel('aim'),
+          stealth: skillLevel('stealth'), influence: skillLevel('influence'), street: skillLevel('street'),
+        },
+      }),
+      setSkillXp: (name, v) => { player.skills[name] = v; return skillLevel(name); },
+      streetAt: (x, z) => streetAt(x, z, cfg),
+      witness: () => (witness ? { timer: Math.round(witness.timer * 10) / 10, ped: { x: witness.ped.group.position.x, z: witness.ped.group.position.z } } : null),
+      heat: () => ({ heat: Math.round(wanted.heat), stars: wanted.stars }),
+      gate: () => (city.islandGate ? { open: Math.round(city.islandGate.open * 100) / 100, beamY: Math.round(city.islandGate.beam.position.y * 100) / 100 } : null),
+      carSilhouettes: () => {
+        const out = {};
+        const list = [...SPECS, { name: 'Interceptor', color: 0x1a1a22 }];
+        for (const s of list) {
+          const m = makeCarMesh(s.color, s.name === 'Interceptor');
+          const box = new THREE.Box3().setFromObject(m.group);
+          const size = new THREE.Vector3();
+          box.getSize(size);
+          // The car faces +z, so z is the length, x the width, y the height.
+          out[s.name] = { len: Math.round(size.z * 100) / 100, h: Math.round(size.y * 100) / 100, w: Math.round(size.x * 100) / 100 };
+          disposeCarMesh(m.group);
+        }
+        return out;
+      },
+      pedsOnSidewalk: () => {
+        // A ped counts as "on the sidewalk" when it stands in the
+        // sidewalk band of its nearest block (offset 13–18 from the
+        // block centre) rather than on a road or inside a block.
+        let on = 0;
+        for (const p of pedestrians) {
+          const b = nearestBlock(p.group.position.x, p.group.position.z, cfg);
+          const off = Math.max(Math.abs(p.group.position.x - b.bx), Math.abs(p.group.position.z - b.bz));
+          if (off >= 13 && off <= 18) on += 1;
+        }
+        return { on, total: pedestrians.length };
+      },
+      placePlayer: (x, z) => {
+        playerMesh.position.set(x, groundYAt(x, z), z);
+        player.groundY = groundYAt(x, z);
+        player.vy = 0;
+        player.grounded = true;
+        state.camFocus = null;
+        return { x, y: playerMesh.position.y, z };
+      },
+      settings: () => ({ ...state.settings, bloom: bloomPass.enabled, far: camera.far, fogMul: state.fogMul, traffic: traffic.length, crowd: walkerCount }),
+      applyPreset: (name) => {
+        const p = cfg.presets[name];
+        if (!p) return null;
+        state.settings.preset = name;
+        state.settings.traffic = p.traffic;
+        state.settings.crowd = p.pedestrians;
+        state.settings.viewDistance = p.far;
+        applySettings();
+        return { ...state.settings, bloom: bloomPass.enabled, far: camera.far };
+      },
+      shirtColor: () => player.shirtColor,
+      groundYAt: (x, z) => groundYAt(x, z),
+      volumes: () => audio.volumes(),
+      // Probe assists (v9 iteration 5): road width, police positions,
+      // car damage, the title camera, and a stopped cruiser to steal.
+      // Each reads or nudges live state; none plays the game.
+      roadCheck: () => ({
+        width: cfg.world.roadWidth,
+        samples: [[-28, 0], [-18.5, 0], [-16, 0], [0, -28], [0, -18.5], [0, -16]].map(([x, z]) => ({ x, z, on: isOnRoad(x, z) })),
+      }),
+      police: () => wanted.policeCars.map((c) => ({
+        x: Math.round(c.group.position.x), z: Math.round(c.group.position.z),
+        speed: Math.round((c.speed || 0) * 100) / 100, heading: Math.round((c.heading || 0) * 100) / 100,
+      })),
+      damageCar: (v) => {
+        if (!player.car) return null;
+        player.car.condition = Math.max(0, Math.min(100, v));
+        return player.car.condition;
+      },
+      titleCam: () => ({
+        x: Math.round(camera.position.x), y: Math.round(camera.position.y), z: Math.round(camera.position.z),
+        r: Math.round(Math.hypot(camera.position.x, camera.position.z)), fog: scene.fog.density,
+      }),
+      // Probe hook (iteration 5, §4): drop a police cruiser on a spot
+      // and stop it — the clamp test parks one just short of the island
+      // gate and watches it hold at x 209 instead of crossing.
+      placePoliceCar: (idx, x, z) => {
+        const c = wanted.policeCars[idx];
+        if (!c) return null;
+        c.group.position.set(x, 0, z);
+        c.speed = 0;
+        return { x, z };
+      },
+      stopPoliceCar: () => {
+        const car = wanted.policeCars.find((c) => Math.abs(c.speed || 0) < 5) || wanted.policeCars[0];
+        if (!car) return null;
+        car.speed = 0;
+        playerMesh.position.set(car.group.position.x + 3, 0, car.group.position.z);
+        player.vy = 0;
+        player.grounded = true;
+        state.camFocus = null;
+        return { x: car.group.position.x, z: car.group.position.z };
+      },
     },
     run() {
-      document.getElementById('btn-start').addEventListener('click', () => {
+      // The title screen's save pill + Continue state, refreshed at
+      // startup and every time the player quits to the title (v9
+      // iteration 5, §6): Continue stays visible but greyed out with
+      // no save, and the pill shows the save summary or the fresh-start
+      // default.
+      const refreshTitleSave = () => {
+        const sv = loadSave();
+        const cb = document.getElementById('btn-continue');
+        if (cb) cb.disabled = !sv;
+        const pt = document.getElementById('save-status-text');
+        if (pt) pt.textContent = sv ? saveSummary(sv) : 'CH.1 HOMECOMING · $0 · REP 0 · DAY 1';
+      };
+      document.getElementById('btn-new-game').addEventListener('click', () => {
         document.getElementById('screen-title').style.display = 'none';
         document.getElementById('screen-controls').style.display = 'none';
         startGame(false);
       });
       document.getElementById('btn-continue').addEventListener('click', () => {
+        if (!loadSave()) return;
         document.getElementById('screen-title').style.display = 'none';
         document.getElementById('screen-controls').style.display = 'none';
         startGame(true);
@@ -3178,6 +3974,11 @@ export function createGame(canvas, seed) {
         state.screen = SCREEN_PLAY;
         document.getElementById('screen-pause').style.display = 'none';
       });
+      document.getElementById('btn-save-game').addEventListener('click', () => {
+        saveGame();
+        hud.showMessage('Game saved.', 2);
+        audio.pickup();
+      });
       document.getElementById('btn-restart-mission').addEventListener('click', () => {
         document.getElementById('screen-pause').style.display = 'none';
         failMission(missions);
@@ -3188,6 +3989,7 @@ export function createGame(canvas, seed) {
         document.getElementById('screen-pause').style.display = 'none';
         document.getElementById('screen-title').style.display = 'flex';
         state.screen = SCREEN_TITLE;
+        refreshTitleSave();
       });
       document.getElementById('btn-respawn').addEventListener('click', () => {
         document.getElementById('screen-over').style.display = 'none';
@@ -3196,12 +3998,57 @@ export function createGame(canvas, seed) {
       document.getElementById('btn-job-continue').addEventListener('click', () => {
         continueAfterJob();
       });
-      const save = loadSave();
-      const contBtn = document.getElementById('btn-continue');
-      contBtn.style.display = save ? 'inline-block' : 'none';
-      const summary = document.getElementById('save-summary');
-      if (summary) summary.textContent = save ? saveSummary(save) : '';
-      document.getElementById('story-intro').textContent = STORY_INTRO;
+      // Settings controls (v9 iteration 5, §5): the preset select and
+      // every slider apply immediately. A preset fills the sliders;
+      // moving a slider switches the preset to CUSTOM.
+      const syncSettingsUI = () => {
+        const s = state.settings;
+        const setVal = (id, v) => { const el = document.getElementById(id); if (el) el.value = v; };
+        const setText = (id, v) => { const el = document.getElementById(id); if (el) el.textContent = v; };
+        setVal('sel-preset', s.preset);
+        setVal('rng-traffic', s.traffic); setText('val-traffic', s.traffic);
+        setVal('rng-crowd', s.crowd); setText('val-crowd', s.crowd);
+        setVal('rng-view', s.viewDistance); setText('val-view', s.viewDistance);
+        setVal('rng-mouse', s.mouseSens); setText('val-mouse', `${s.mouseSens.toFixed(1)}×`);
+        setVal('rng-master', Math.round(s.master * 100)); setText('val-master', Math.round(s.master * 100));
+        setVal('rng-music', Math.round(s.music * 100)); setText('val-music', Math.round(s.music * 100));
+        setVal('rng-effects', Math.round(s.effects * 100)); setText('val-effects', Math.round(s.effects * 100));
+        setVal('rng-engine', Math.round(s.engine * 100)); setText('val-engine', Math.round(s.engine * 100));
+      };
+      document.getElementById('sel-preset').addEventListener('change', (e) => {
+        const p = cfg.presets[e.target.value];
+        if (!p) return;
+        state.settings.preset = e.target.value;
+        state.settings.traffic = p.traffic;
+        state.settings.crowd = p.pedestrians;
+        state.settings.viewDistance = p.far;
+        applySettings();
+        syncSettingsUI();
+      });
+      const bindSlider = (id, valId, parse, apply, format) => {
+        const el = document.getElementById(id);
+        if (!el) return;
+        el.addEventListener('input', () => {
+          const v = parse(el.value);
+          apply(v);
+          state.settings.preset = 'CUSTOM';
+          applySettings();
+          const label = document.getElementById(valId);
+          if (label) label.textContent = format(v);
+          const sel = document.getElementById('sel-preset');
+          if (sel) sel.value = 'CUSTOM';
+        });
+      };
+      bindSlider('rng-traffic', 'val-traffic', (v) => parseInt(v, 10), (v) => { state.settings.traffic = v; }, (v) => String(v));
+      bindSlider('rng-crowd', 'val-crowd', (v) => parseInt(v, 10), (v) => { state.settings.crowd = v; }, (v) => String(v));
+      bindSlider('rng-view', 'val-view', (v) => parseInt(v, 10), (v) => { state.settings.viewDistance = v; }, (v) => String(v));
+      bindSlider('rng-mouse', 'val-mouse', (v) => parseFloat(v), (v) => { state.settings.mouseSens = v; }, (v) => `${v.toFixed(1)}×`);
+      bindSlider('rng-master', 'val-master', (v) => parseInt(v, 10) / 100, (v) => { state.settings.master = v; }, (v) => String(Math.round(v * 100)));
+      bindSlider('rng-music', 'val-music', (v) => parseInt(v, 10) / 100, (v) => { state.settings.music = v; }, (v) => String(Math.round(v * 100)));
+      bindSlider('rng-effects', 'val-effects', (v) => parseInt(v, 10) / 100, (v) => { state.settings.effects = v; }, (v) => String(Math.round(v * 100)));
+      bindSlider('rng-engine', 'val-engine', (v) => parseInt(v, 10) / 100, (v) => { state.settings.engine = v; }, (v) => String(Math.round(v * 100)));
+      refreshTitleSave();
+      syncSettingsUI();
       requestAnimationFrame(frame);
     },
     showGameOver(reason) {

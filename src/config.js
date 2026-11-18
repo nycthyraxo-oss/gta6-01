@@ -8,8 +8,8 @@
 export const CONFIG = {
   seed: 20261117,
   world: {
-    blockSize: 42,
-    roadWidth: 14,
+    blockSize: 36,
+    roadWidth: 20,
     blocks: 5,
     beachX: 150,
     seaX: 178,
@@ -34,6 +34,7 @@ export const CONFIG = {
     repPerPackage: 2,
     repPerRace: 5,
     repPerStunt: 1,
+    repPerDelivery: 3,
     shootRange: 55,
     shootDamage: 34,
     shootCooldown: 0.22,
@@ -96,6 +97,8 @@ export const CONFIG = {
     hitPedHeat: 40,
     hitCarHeat: 12,
     shootHeat: 25,
+    // v9 iteration 5 (§4): a witness who finishes their 3 s report.
+    witnessHeat: 15,
     roadblockStars: 3,
     heliStars: 4,
     heliHeight: 55,
@@ -118,18 +121,118 @@ export const CONFIG = {
     repairCost: 80,
     armourPrice: 100,
   },
-  // v9 iteration 4: the two money sinks. Both on protected blocks, clear
+  // v9 iteration 5: the two money sinks. Both on protected blocks, clear
   // of mission lines, spawn, package spots and the docks duel. The gun
   // shop sells weapons and ammo; Pay 'n' Spray repairs, repaints and
   // takes bribes.
   shops: {
     gun: { x: -128, z: 40, name: 'AMMU-NATION COSTA' },
     spray: { x: 96, z: 112, name: "PAY 'N' SPRAY" },
+    // v9 iteration 5: the outfit shop — a beachfront boutique on the
+    // boardwalk that sells shirt colours (cosmetic player colours).
+    outfit: { x: 160, z: -28, name: 'BUTIK NEON' },
+  },
+  // v9 iteration 5: street names — our own Indonesian names, one per road
+  // line. Avenues run north-south (constant x), streets east-west
+  // (constant z). The HUD reads "Jalan Fuego · DOWNTOWN".
+  streetNames: {
+    avenues: {
+      '-140': 'Jalan Pelabuhan', '-84': 'Jalan Merdeka', '-28': 'Jalan Kenanga',
+      '28': 'Jalan Fuego', '84': 'Jalan Mawar', '140': 'Jalan Pantai',
+    },
+    streets: {
+      '-140': 'Jalan Garuda', '-84': 'Jalan Melati', '-28': 'Jalan Coral',
+      '28': 'Jalan Anggrek', '84': 'Jalan Sudirman', '140': 'Jalan Bahari',
+    },
+  },
+  // v9 iteration 5: REP ranks — named titles, our own. Each rank unlocks
+  // jobs + gear (race 2 needs REP 20, race 3 REP 50, The Big Score REP 30).
+  repRanks: [
+    { rep: 0, name: 'ANAK BARU' },
+    { rep: 25, name: 'JALANAN' },
+    { rep: 60, name: 'PEMAIN' },
+    { rep: 120, name: 'JAGOAN' },
+    { rep: 200, name: 'RAJA JALAN' },
+    { rep: 350, name: 'LEGENDA COSTA' },
+  ],
+  // v9 iteration 5: six skills, each 0-5, each with a small real effect.
+  // Driving +2% top speed/level, Stamina +3% run speed/level, Aim +5%
+  // hit tolerance/level, Stealth -5% heat gain/level, Influence -3%
+  // shop prices/level, Street Sense shows packages + medals on the map
+  // from level 2. XP thresholds per level: 10/25/45/70/100.
+  skills: {
+    driving: { xpPer: 100, label: 'Driving' },
+    stamina: { xpPer: 10, label: 'Stamina' },
+    aim: { xpPer: 1, label: 'Aim' },
+    stealth: { xpPer: 1, label: 'Stealth' },
+    influence: { xpPer: 1, label: 'Influence' },
+    street: { xpPer: 1, label: 'Street Sense' },
+  },
+  skillLevels: [0, 10, 25, 45, 70, 100],
+  // v9 iteration 5: 24 Fuego Medals hidden across the map — gold coins
+  // on the roads, the pier, the beach, the plaza and the island. $100
+  // each, and the full set pays a $5,000 bonus.
+  medals: {
+    count: 24,
+    reward: 100,
+    bonus: 5000,
+    pickupRadius: 2.6,
+  },
+  // v9 iteration 5: three street races. Race 1 is the old garage-road
+  // sprint; race 2 is the Coral Row dash (REP 20); race 3 is the Pantai
+  // grand tour around the whole east side (REP 50).
+  races: [
+    {
+      name: 'Jalan Fuego Sprint', repReq: 0, timeLimit: 75, prize: 300, rep: 5,
+      start: { x: -28, z: 84 },
+      checkpoints: [{ x: 84, z: 84 }, { x: 84, z: -28 }],
+      finish: { x: -28, z: -28 },
+    },
+    {
+      name: 'Coral Row Dash', repReq: 20, timeLimit: 75, prize: 500, rep: 8,
+      start: { x: -84, z: 28 },
+      checkpoints: [{ x: -84, z: -84 }, { x: 28, z: -84 }],
+      finish: { x: 28, z: 28 },
+    },
+    {
+      name: 'Pantai Grand Tour', repReq: 50, timeLimit: 90, prize: 800, rep: 12,
+      start: { x: 84, z: 84 },
+      checkpoints: [{ x: 84, z: -140 }, { x: -140, z: -140 }],
+      finish: { x: -140, z: 84 },
+    },
+  ],
+  // v9 iteration 5: courier side jobs for Marla's contacts — pick up at
+  // the marker, deliver before the clock runs out. REP-gated like the
+  // races: job 2 needs REP 10, job 3 needs REP 25.
+  deliveries: [
+    { name: 'Kopi untuk Marla', repReq: 0, timeLimit: 90, prize: 200,
+      pickup: { x: -84, z: 28 }, drop: { x: 0, z: 112 } },
+    { name: 'Paket Mercado', repReq: 10, timeLimit: 75, prize: 250,
+      pickup: { x: 56, z: -84 }, drop: { x: 56, z: -56 } },
+    { name: 'Kirim ke Garasi', repReq: 25, timeLimit: 120, prize: 400,
+      pickup: { x: 158, z: 0 }, drop: { x: -112, z: 84 } },
+  ],
+  // v9 iteration 5: the causeway + island district east of Fuego Pier.
+  // The gate at the causeway mouth opens as the player approaches.
+  island: {
+    x0: 222, x1: 272, z0: 72, z1: 128,
+    gate: { x: 209, z: 100 },
+    name: 'Pulau Fuego',
+  },
+  // v9 iteration 5: graphics presets. LOW drops the pixel ratio, bloom
+  // and shadows and thins the traffic + crowd; HIGH pushes them up.
+  // The pause-menu sliders override the preset's traffic/crowd counts.
+  presets: {
+    LOW: { pixelRatio: 1, bloom: false, shadows: false, shadowSize: 512, traffic: 10, pedestrians: 12, far: 400, fogMul: 1.3 },
+    MED: { pixelRatio: 1.5, bloom: true, shadows: true, shadowSize: 1024, traffic: 22, pedestrians: 26, far: 900, fogMul: 1 },
+    HIGH: { pixelRatio: 2, bloom: true, shadows: true, shadowSize: 2048, traffic: 30, pedestrians: 36, far: 1200, fogMul: 0.8 },
   },
   // v9 iteration 4: free-roam side activities. The street race starts on
   // the garage road and runs three intersections for $300 + 5 REP; the
   // three stunt ramps sit on road shoulders, clear of junctions and
   // mission lines — hit one over 15 m/s and the car flies.
+  // v9 iteration 5: cfg.race is race 1 of cfg.races (kept as the alias
+  // for the HUD + staging); the game runs all three races from cfg.races.
   race: {
     start: { x: -28, z: 84 },
     checkpoints: [{ x: 84, z: 84 }, { x: 84, z: -28 }],
@@ -138,8 +241,17 @@ export const CONFIG = {
     prize: 300,
   },
   stunts: {
-    prize: 100,
-    ramps: [{ x: 33, z: 56 }, { x: -135, z: -56 }, { x: 56, z: -135 }],
+    // v9 iteration 5: the first landing on a ramp pays firstPrize,
+    // every repeat landing pays prize.
+    prize: 50,
+    firstPrize: 500,
+    // v9 iteration 5: six ramps — the old three plus three more on the
+    // east-west roads. `axis` is the launch direction ('x' along an
+    // east-west road, 'z' along a north-south one).
+    ramps: [
+      { x: 33, z: 56, axis: 'z' }, { x: -135, z: -56, axis: 'z' }, { x: 56, z: -135, axis: 'x' },
+      { x: -100, z: 28, axis: 'x' }, { x: 100, z: -28, axis: 'x' }, { x: -100, z: 84, axis: 'x' },
+    ],
   },
   // Neon night: the look the L key switches to. Dusk is the default; night
   // is a dark sky, a moon-cold sun, and the street lamps turned all the way

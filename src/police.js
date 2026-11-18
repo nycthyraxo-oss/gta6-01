@@ -291,6 +291,11 @@ export function updatePolice(wanted, dt, scene, playerPos, playerInCar, onRam, o
     const d = Math.hypot(car.group.position.x - playerPos.x, car.group.position.z - playerPos.z);
     if (d < nearest) nearest = d;
   }
+  // v9 iteration 5 (§3/§4): past the gate — the player is on the
+  // causeway past x = 209 or on the island. Declared here, at function
+  // scope, because the chase loop and the officers below reuse it.
+  const pastGate = (playerPos.x > 209 && playerPos.z >= 98 && playerPos.z <= 102)
+    || (playerPos.x >= 222 && playerPos.x <= 275 && playerPos.z >= 70 && playerPos.z <= 130);
   if (wanted.stars > 0) {
     const r = cfg.police.searchZoneBase + cfg.police.searchZonePerStar * wanted.stars;
     if (nearest <= cfg.police.sightRange) {
@@ -300,8 +305,18 @@ export function updatePolice(wanted, dt, scene, playerPos, playerInCar, onRam, o
     }
     const inZone = wanted.searchZone
       && Math.hypot(playerPos.x - wanted.searchZone.x, playerPos.z - wanted.searchZone.z) < wanted.searchZone.r;
-    if (nearest > cfg.police.sightRange && !inZone && !wanted.heliOverhead) {
-      wanted.heat = Math.max(0, wanted.heat - cfg.police.decayPerSecond * dt);
+    // v9 iteration 5 (§4): evasion — out of sight AND far (nearest
+    // police > 60) AND not in a vision cone cools heat TWICE as fast.
+    // Breaking line of sight is how you lose them. The cone flag comes
+    // from the game via policeCtx (the game computes the vision cones).
+    // The island is a refuge too: past the gate the heat cools twice as
+    // fast even with the cops holding at the gate (38 m, inside sight
+    // range), unless a cone is on you or the heli is overhead.
+    const inCone = policeCtx && policeCtx.inVisionCone;
+    const far = nearest > 60;
+    if ((nearest > cfg.police.sightRange && !inZone && !wanted.heliOverhead) || (pastGate && !inCone && !wanted.heliOverhead)) {
+      const rate = cfg.police.decayPerSecond * ((far || pastGate) && !inCone ? 2 : 1);
+      wanted.heat = Math.max(0, wanted.heat - rate * dt);
       const s = wanted.heat <= 0 ? 0 : Math.max(1, Math.ceil(wanted.heat / cfg.police.heatPerStar));
       wanted.stars = s;
       if (wanted.stars === 0) wanted.searchZone = null;
@@ -379,6 +394,15 @@ export function updatePolice(wanted, dt, scene, playerPos, playerInCar, onRam, o
       pos.z -= Math.cos(car.heading) * 2.5;
       car.speed = 4;
     }
+    // v9 iteration 5 (§3/§4): cruisers never drive into the sea, and
+    // once the player is past the gate they hold at x = 209 instead of
+    // following onto the island. A cruiser already on the island is
+    // left alone (it got there before the player crossed the gate).
+    // pastGate is computed above, once per updatePolice call.
+    const onCorridor = pos.z >= 98 && pos.z <= 102 && pos.x <= 275;
+    const onIsland = pos.x >= 222 && pos.x <= 275 && pos.z >= 70 && pos.z <= 130;
+    if (pos.x > 172 && !onCorridor && !onIsland) { pos.x = 172; car.speed *= 0.5; }
+    else if (pastGate && onCorridor && pos.x > 209) { pos.x = 209; car.speed *= 0.5; }
     // Arrest: only from 3 stars up, with the ladder's delay.
     if (ladder.arrest && !playerInCar && dist < cfg.police.arrestRange + 6) {
       wanted.arrestTimer += dt;
@@ -421,6 +445,13 @@ export function updatePolice(wanted, dt, scene, playerPos, playerInCar, onRam, o
         if (ladder.officerHold && dist <= ladder.officerHold) continue;
         pos.x += (dx / dist) * o.speed * dt;
         pos.z += (dz / dist) * o.speed * dt;
+        // v9 iteration 5 (§3/§4): officers never wade into the sea, and
+        // they hold at the gate like the cruisers. An officer already on
+        // the island is left alone.
+        const oOnCorridor = pos.z >= 98 && pos.z <= 102 && pos.x <= 275;
+        const oOnIsland = pos.x >= 222 && pos.x <= 275 && pos.z >= 70 && pos.z <= 130;
+        if (pos.x > 172 && !oOnCorridor && !oOnIsland) pos.x = 172;
+        else if (pastGate && oOnCorridor && pos.x > 209) pos.x = 209;
       }
     }
   } else {

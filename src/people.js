@@ -78,6 +78,10 @@ export function makePersonMesh(shirt, pants, skin, opts = {}) {
   torso.scale.set(1.15, 1, 0.82);
   torso.position.y = 1.12;
   torso.castShadow = true;
+  // v9 iteration 5 (§2): the outfit shop repaints the player's shirt —
+  // the torso, shoulders and upper arms are tagged so the swap can find
+  // them without touching the shared shirt material other peds use.
+  torso.userData.part = 'shirt';
   rig.add(torso);
 
   // A vendor's apron: a flat cloth panel over the torso front.
@@ -95,6 +99,7 @@ export function makePersonMesh(shirt, pants, skin, opts = {}) {
     const shoulder = new THREE.Mesh(geo('shoulder', () => new THREE.SphereGeometry(0.11, 10, 8)), shirtMat);
     shoulder.position.set(sx, 1.5, 0);
     shoulder.castShadow = true;
+    shoulder.userData.part = 'shirt';
     rig.add(shoulder);
   }
 
@@ -106,6 +111,7 @@ export function makePersonMesh(shirt, pants, skin, opts = {}) {
   for (const arm of [armL, armR]) {
     const upper = limb(0.08, 0.52, shirtMat);
     upper.position.y = -0.26;
+    upper.userData.part = 'shirt';
     arm.add(upper);
     const hand = new THREE.Mesh(geo('hand', () => new THREE.SphereGeometry(0.09, 8, 6)), skinMat);
     hand.position.y = -0.56;
@@ -142,8 +148,21 @@ export function makePersonMesh(shirt, pants, skin, opts = {}) {
 export function spawnPedestrian(scene, rng, cfg, blockCenters) {
   const bx = blockCenters[Math.floor(rng.next() * blockCenters.length)];
   const bz = blockCenters[Math.floor(rng.next() * blockCenters.length)];
-  const x = bx + rng.range(-18, 18);
-  const z = bz + rng.range(-18, 18);
+  // v9 iteration 5 (§0): peds spawn ON the sidewalk ring — the band
+  // between the road edge (±10 from the road line) and the building
+  // frontage (±18 from the block centre) — on one of the four sides, so
+  // the crowd visibly walks the pavements instead of the block interiors.
+  // Their heading is axis-aligned (along the sidewalk, ± a small jitter),
+  // never diagonal across the block.
+  const side = Math.floor(rng.next() * 4);
+  const off = rng.range(14, 17);
+  const along = rng.range(-14, 14);
+  let x;
+  let z;
+  if (side === 0) { x = bx + off; z = bz + along; }
+  else if (side === 1) { x = bx - off; z = bz + along; }
+  else if (side === 2) { x = bx + along; z = bz + off; }
+  else { x = bx + along; z = bz - off; }
   const mesh = makePersonMesh(
     SHIRT_COLORS[Math.floor(rng.next() * SHIRT_COLORS.length)],
     PANTS_COLORS[Math.floor(rng.next() * PANTS_COLORS.length)],
@@ -157,7 +176,7 @@ export function spawnPedestrian(scene, rng, cfg, blockCenters) {
   scene.add(mesh);
   return {
     group: mesh,
-    heading: rng.range(0, Math.PI * 2),
+    heading: (Math.floor(rng.next() * 4) * Math.PI) / 2 + rng.range(-0.15, 0.15),
     speed: cfg.pedestrians.walkSpeed * rng.range(0.8, 1.3),
     state: 'walk',
     fleeX: 0,
@@ -169,6 +188,71 @@ export function spawnPedestrian(scene, rng, cfg, blockCenters) {
     // optional chat spot — a fixed place where this ped stops to talk in
     // a group (assigned by the game for a few peds, null for the rest).
     panicT: 0,
+    dodgeT: 0,
+    dodgeX: 0,
+    dodgeZ: 0,
+    chat: null,
+  };
+}
+
+// The sidewalk ring of the nearest block (v9 iteration 5, §0): the band
+// between the building frontages (~13 m from the block centre) and the
+// curb (18 m). Computed from the grid in config, never hardcoded.
+export function nearestBlock(x, z, cfg) {
+  const W = cfg.world;
+  const pitch = W.blockSize + W.roadWidth;
+  const half = (W.blocks * W.blockSize + (W.blocks + 1) * W.roadWidth) / 2;
+  const first = -half + W.roadWidth + W.blockSize / 2;
+  const ix = Math.max(0, Math.min(W.blocks - 1, Math.round((x - first) / pitch)));
+  const iz = Math.max(0, Math.min(W.blocks - 1, Math.round((z - first) / pitch)));
+  return { bx: first + ix * pitch, bz: first + iz * pitch };
+}
+
+// A witness marker (v9 iteration 5, §4): a gold octahedron floating above
+// a ped who saw a crime and is about to call the cops. The marker is
+// per-ped (its geometry is disposed when cleared); the material is shared.
+const WITNESS_MAT = new THREE.MeshBasicMaterial({ color: 0xffd23e });
+export function markWitness(p) {
+  if (p.witnessMarker) return;
+  const m = new THREE.Mesh(new THREE.OctahedronGeometry(0.35), WITNESS_MAT);
+  m.position.y = 2.3;
+  p.group.add(m);
+  p.witnessMarker = m;
+}
+export function clearWitness(p) {
+  if (!p.witnessMarker) return;
+  p.group.remove(p.witnessMarker);
+  p.witnessMarker.geometry.dispose();
+  p.witnessMarker = null;
+}
+
+// A civilian who just had their car stolen (v9 iteration 5, §1): they
+// spawn at the carjacking spot and flee away from the player for 3 s,
+// then calm down and walk the sidewalks like everyone else. A runtime
+// event, not part of the seeded world layout, so the outfit is a plain
+// Math.random pick.
+export function spawnFleeingPed(scene, x, z, awayDir) {
+  const mesh = makePersonMesh(
+    SHIRT_COLORS[Math.floor(Math.random() * SHIRT_COLORS.length)],
+    PANTS_COLORS[Math.floor(Math.random() * PANTS_COLORS.length)],
+    SKIN_TONES[Math.floor(Math.random() * SKIN_TONES.length)],
+    {
+      height: 0.92 + Math.random() * 0.16,
+      hair: HAIR_COLORS[Math.floor(Math.random() * HAIR_COLORS.length)],
+    },
+  );
+  mesh.position.set(x, 0, z);
+  scene.add(mesh);
+  return {
+    group: mesh,
+    heading: Math.atan2(awayDir.x, awayDir.z),
+    speed: 4.5,
+    state: 'panic',
+    fleeX: awayDir.x,
+    fleeZ: awayDir.z,
+    walkTimer: 0,
+    bob: 0,
+    panicT: 3,
     dodgeT: 0,
     dodgeX: 0,
     dodgeZ: 0,
@@ -313,7 +397,10 @@ export function updatePedestrian(p, dt, cfg, gunshotPos, isRoad, cars) {
         p.walkTimer = 3 + Math.random() * 4;
       } else {
         p.walkTimer = 2 + Math.random() * 6;
-        p.heading += (Math.random() - 0.5) * 2.4;
+        // v9 iteration 5 (§0): turns snap to the nearest axis direction
+        // (the sidewalks run axis-aligned), so the crowd walks the
+        // pavements instead of drifting diagonally across the blocks.
+        p.heading = Math.round(p.heading / (Math.PI / 2)) * (Math.PI / 2) + (Math.random() - 0.5) * 0.3;
       }
     }
     const nx = pos.x + Math.sin(p.heading) * p.speed * dt;
@@ -322,7 +409,21 @@ export function updatePedestrian(p, dt, cfg, gunshotPos, isRoad, cars) {
       // Sidewalk walkers: a step onto a road turns the walker away instead
       // of letting the crowd wander into traffic. (Fleeing pedestrians run
       // anywhere — panic does not check the curb.)
-      if (isRoad && isRoad(nx, nz)) {
+      // v9 iteration 5 (§0): a walker already on the sidewalk ring also
+      // turns away from the block interior, so the crowd walks the
+      // pavements instead of cutting through buildings. A ped who is NOT
+      // on the ring (fled there during a panic) walks freely until they
+      // reach one.
+      let blocked = isRoad && isRoad(nx, nz);
+      if (!blocked) {
+        const cur = nearestBlock(pos.x, pos.z, cfg);
+        const onRing = Math.max(Math.abs(pos.x - cur.bx), Math.abs(pos.z - cur.bz)) >= 13;
+        if (onRing) {
+          const nxt = nearestBlock(nx, nz, cfg);
+          if (Math.max(Math.abs(nx - nxt.bx), Math.abs(nz - nxt.bz)) < 13) blocked = true;
+        }
+      }
+      if (blocked) {
         p.heading += Math.PI / 2;
       } else {
         pos.x = nx;
@@ -334,6 +435,8 @@ export function updatePedestrian(p, dt, cfg, gunshotPos, isRoad, cars) {
   }
   p.group.rotation.y = p.heading;
   p.bob += dt * (p.state === 'panic' ? 14 : p.state === 'dodge' ? 10 : 7);
+  // The witness marker bobs above the ped's head while they are reporting.
+  if (p.witnessMarker) p.witnessMarker.position.y = 2.3 + Math.sin(p.bob * 2) * 0.15;
   const swing = Math.sin(p.bob) * (p.state === 'panic' ? 0.85 : 0.55);
   const joints = p.group.userData;
   if (joints.armL) {

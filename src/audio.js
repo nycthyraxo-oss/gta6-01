@@ -24,6 +24,11 @@ export function createAudio(camera, scene) {
   let sirenOsc = null;
   let sirenGain = null;
   let muted = false;
+  // v9 iteration 5 (§5): volume sliders — master (the whole mix),
+  // music (radio notes), effects (gunfire, crashes, siren, pickups),
+  // engine (the driving synth). Each is a 0–1 multiplier set from the
+  // pause screen; master also scales the master gain (base 0.5).
+  let volumes = { master: 1, music: 1, effects: 1, engine: 1 };
   let musicTimer = 0;
   let musicStep = 0;
   let station = 0;
@@ -53,7 +58,7 @@ export function createAudio(camera, scene) {
       if (!AC) return false;
       ctx = new AC();
       master = ctx.createGain();
-      master.gain.value = muted ? 0 : 0.5;
+      master.gain.value = muted ? 0 : 0.5 * volumes.master;
       master.connect(ctx.destination);
       engineOsc = ctx.createOscillator();
       engineOsc.type = 'sawtooth';
@@ -144,7 +149,9 @@ export function createAudio(camera, scene) {
       osc.frequency.setValueAtTime(Math.max(20, freq), ctx.currentTime);
       if (slideTo) osc.frequency.exponentialRampToValueAtTime(Math.max(20, slideTo), ctx.currentTime + dur);
       const g = ctx.createGain();
-      g.gain.setValueAtTime((vol || 0.2) * (duck && ducking ? 0.35 : 1), ctx.currentTime);
+      // Music notes pass duck=true; everything else through blip is an
+      // effect (gunfire, pickups, clicks, the tuning blip).
+      g.gain.setValueAtTime((vol || 0.2) * (duck ? volumes.music : volumes.effects) * (duck && ducking ? 0.35 : 1), ctx.currentTime);
       g.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + dur);
       osc.connect(g);
       g.connect(master);
@@ -166,7 +173,7 @@ export function createAudio(camera, scene) {
       const src = ctx.createBufferSource();
       src.buffer = buf;
       const g = ctx.createGain();
-      g.gain.value = vol || 0.3;
+      g.gain.value = (vol || 0.3) * volumes.effects;
       src.connect(g);
       g.connect(master);
       src.start();
@@ -182,11 +189,27 @@ export function createAudio(camera, scene) {
     },
     toggleMute() {
       muted = !muted;
-      if (master) master.gain.value = muted ? 0 : 0.5;
+      if (master) master.gain.value = muted ? 0 : 0.5 * volumes.master;
       return muted;
     },
     isMuted() {
       return muted;
+    },
+    // Pause-screen volume sliders (v9 iteration 5, §5): each value is a
+    // 0–1 multiplier. Safe to call before the audio context exists —
+    // the multipliers are stored and applied when it is built.
+    setVolumes(v) {
+      volumes = { ...volumes, ...v };
+      if (master && ctx) {
+        try {
+          master.gain.setTargetAtTime(muted ? 0 : 0.5 * volumes.master, ctx.currentTime, 0.05);
+        } catch {
+          // Audio is decoration; a failure never stops the game.
+        }
+      }
+    },
+    volumes() {
+      return { ...volumes };
     },
     gunshot() {
       noiseBurst(0.14, 0.5);
@@ -222,7 +245,7 @@ export function createAudio(camera, scene) {
       try {
         engineOsc.frequency.setTargetAtTime(safeF, ctx.currentTime, 0.05);
         engineGain.gain.setTargetAtTime(
-          driving && !muted ? 0.05 + 0.05 * speed01 + (boost ? 0.02 : 0) : 0,
+          driving && !muted ? (0.05 + 0.05 * speed01 + (boost ? 0.02 : 0)) * volumes.engine : 0,
           ctx.currentTime, 0.1,
         );
       } catch {
@@ -234,7 +257,7 @@ export function createAudio(camera, scene) {
       try {
         const f = 650 + 250 * Math.sin(time * 5);
         sirenOsc.frequency.setTargetAtTime(Number.isFinite(f) ? f : 650, ctx.currentTime, 0.05);
-        sirenGain.gain.setTargetAtTime(on && !muted ? 0.035 : 0, ctx.currentTime, 0.2);
+        sirenGain.gain.setTargetAtTime(on && !muted ? 0.035 * volumes.effects : 0, ctx.currentTime, 0.2);
       } catch {
         // Guarded: a bad audio parameter must never kill the frame loop.
       }
@@ -250,7 +273,7 @@ export function createAudio(camera, scene) {
         sirenAnchor.position.set(x, y, z);
         if (on && !muted) {
           if (!sirenPos.isPlaying) sirenPos.play();
-          sirenPos.setVolume(0.6);
+          sirenPos.setVolume(0.6 * volumes.effects);
         } else if (sirenPos.isPlaying) {
           sirenPos.pause();
         }
@@ -269,7 +292,7 @@ export function createAudio(camera, scene) {
         oneShotNext = (oneShotNext + 1) % oneShots.length;
         if (slot.src.isPlaying) slot.src.stop();
         slot.src.setBuffer(kind === 'blast' ? blastBuf : shotBuf);
-        slot.src.setVolume(kind === 'blast' ? 0.9 : 0.7);
+        slot.src.setVolume((kind === 'blast' ? 0.9 : 0.7) * volumes.effects);
         slot.anchor.position.set(x, y, z);
         slot.src.play();
       } catch {

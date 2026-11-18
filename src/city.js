@@ -32,6 +32,26 @@ const SHOP_SIGNS = [
   { text: 'FARMACIA', bg: '#2a5a3a', fg: '#ffffff' },
   { text: 'BURGER FUEGO', bg: '#5a2a1a', fg: '#ffd23e' },
   { text: 'SURF & SOL', bg: '#1a4a5a', fg: '#7dffd8' },
+  // v9 iteration 5 (§0): ground-floor commercial for the dense city fill —
+  // our own Indonesian shop names, so the street reads Costa Fuego.
+  { text: 'BENGKEL JAYA', bg: '#2a2a2a', fg: '#ffd23e' },
+  { text: 'MINIMARKET 24', bg: '#1a5a2a', fg: '#ffffff' },
+  { text: 'WARUNG KOPI', bg: '#5a3a1a', fg: '#ffe9a8' },
+  { text: 'TOKO KELONTONG', bg: '#3a2a5a', fg: '#7dffd8' },
+  { text: 'CAFE SENJA', bg: '#5a2a3a', fg: '#ffb27a' },
+  { text: 'LAUNDRY KILAT', bg: '#1a3a5a', fg: '#7dd8ff' },
+  { text: 'BARBERSHOP', bg: '#2a2a2a', fg: '#eaf4ff' },
+  { text: 'ROTI BAKAR', bg: '#7a4a1a', fg: '#ffe9a8' },
+  { text: 'CUCI MOTOR', bg: '#123a4a', fg: '#7dffd8' },
+  { text: 'KEDAI MIE', bg: '#7a1a1a', fg: '#ffd23e' },
+  { text: 'TOKO BANGUNAN', bg: '#4a4a1a', fg: '#ffffff' },
+  { text: 'BENGKEL LAS', bg: '#3a3a3a', fg: '#ffb27a' },
+  { text: 'WARUNG NASI', bg: '#2a5a1a', fg: '#ffe9a8' },
+  { text: 'TOKO HP', bg: '#1a1a3a', fg: '#7dd8ff' },
+  { text: 'APOTEK SEHAT', bg: '#1a5a3a', fg: '#ffffff' },
+  { text: 'KIOS PULSA', bg: '#5a1a5a', fg: '#ffd23e' },
+  { text: 'CAFE PANTAI', bg: '#1a4a5a', fg: '#ffe9a8' },
+  { text: 'TOKO BUNGA', bg: '#5a2a4a', fg: '#ffb27a' },
 ];
 
 function signTexture(text, bg, fg, canvasW = 256) {
@@ -267,6 +287,27 @@ export function districtAt(x, z) {
   return { name: 'DOWNTOWN', tag: 'DOWNTOWN', style: 'commercial' };
 }
 
+// Street name at a position (v9 iteration 5, §3): the nearest road line
+// within 10.5 m of it — avenue names on the north-south roads, street
+// names on the east-west ones, our own Indonesian names. Returns null
+// off-road (on a block, the beach, or the island).
+export function streetAt(x, z, cfg) {
+  const lines = [];
+  const W = cfg.world;
+  const pitch = W.blockSize + W.roadWidth;
+  const half = (W.blocks * W.blockSize + (W.blocks + 1) * W.roadWidth) / 2;
+  for (let i = 0; i <= W.blocks; i += 1) lines.push(-half + W.roadWidth / 2 + i * pitch);
+  let best = null;
+  let bestD = 10.5;
+  for (let i = 0; i < lines.length; i += 1) {
+    const dx = Math.abs(x - lines[i]);
+    if (dx < bestD) { bestD = dx; best = cfg.streetNames.avenues[lines[i]]; }
+    const dz = Math.abs(z - lines[i]);
+    if (dz < bestD) { bestD = dz; best = cfg.streetNames.streets[lines[i]]; }
+  }
+  return best;
+}
+
 function box(w, h, d, color, x, y, z) {
   const mesh = new THREE.Mesh(
     new THREE.BoxGeometry(w, h, d),
@@ -293,7 +334,89 @@ function flat(w, d, color, x, z, y) {
 // Roads go dark and glossy, sidewalks and the open ground get a sheen
 // instead of flat paint — the big tan emptiness in the v8 frames was the
 // ground reading as dry dirt. Puddles (below) sit on top of these.
-const wetRoadMat = new THREE.MeshStandardMaterial({ color: 0x2b2e35, roughness: 0.35, metalness: 0.25 });
+// Asphalt + paved-slab textures (v9 iteration 5, §0): the road used to
+// read as one flat dark slab and the sidewalks as bare brown dirt. The
+// asphalt canvas is dark grey with speckle, faint patches and hairline
+// cracks; the sidewalk canvas is a grid of paving slabs with a darker
+// joint every 64 px and a slight per-slab brightness variation. Both are
+// drawn with hash01, not rng — deterministic, no stream cost. The
+// asphalt texture is made twice with different repeats (one per road
+// direction) so the speckle never stretches: a vertical strip tiles 1
+// across and 15 along its 300 m length, a horizontal strip the opposite.
+function asphaltTexture(rx, ry) {
+  const canvas = document.createElement('canvas');
+  canvas.width = 256;
+  canvas.height = 256;
+  const ctx = canvas.getContext('2d');
+  ctx.fillStyle = '#2b2e35';
+  ctx.fillRect(0, 0, 256, 256);
+  for (let i = 0; i < 900; i += 1) {
+    const x = hash01(i, 11, 12) * 256;
+    const y = hash01(i, 13, 14) * 256;
+    const r = 0.6 + hash01(i, 15, 16) * 2.2;
+    ctx.fillStyle = hash01(i, 17, 18) < 0.5 ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.12)';
+    ctx.beginPath();
+    ctx.arc(x, y, r, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  for (let i = 0; i < 8; i += 1) {
+    ctx.fillStyle = 'rgba(0,0,0,0.08)';
+    ctx.beginPath();
+    ctx.ellipse(hash01(i, 21, 22) * 256, hash01(i, 23, 24) * 256, 20 + hash01(i, 25, 26) * 40, 12 + hash01(i, 27, 28) * 20, hash01(i, 29, 30) * Math.PI, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  ctx.strokeStyle = 'rgba(0,0,0,0.25)';
+  ctx.lineWidth = 1;
+  for (let i = 0; i < 6; i += 1) {
+    let x = hash01(i, 31, 32) * 256;
+    let y = hash01(i, 33, 34) * 256;
+    ctx.beginPath();
+    ctx.moveTo(x, y);
+    for (let s = 0; s < 5; s += 1) {
+      x += (hash01(i, 35 + s, 36 + s) - 0.5) * 40;
+      y += (hash01(i, 45 + s, 46 + s) - 0.5) * 40;
+      ctx.lineTo(x, y);
+    }
+    ctx.stroke();
+  }
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  tex.wrapS = THREE.RepeatWrapping;
+  tex.wrapT = THREE.RepeatWrapping;
+  tex.repeat.set(rx, ry);
+  return tex;
+}
+function sidewalkTexture() {
+  const canvas = document.createElement('canvas');
+  canvas.width = 256;
+  canvas.height = 256;
+  const ctx = canvas.getContext('2d');
+  ctx.fillStyle = '#8a8578';
+  ctx.fillRect(0, 0, 256, 256);
+  // 4x4 paving slabs: slight per-slab brightness + a dark joint grid.
+  for (let sx = 0; sx < 4; sx += 1) {
+    for (let sy = 0; sy < 4; sy += 1) {
+      const v = hash01(sx, sy, 61);
+      ctx.fillStyle = v < 0.5 ? `rgba(255,255,255,${0.02 + v * 0.05})` : `rgba(0,0,0,${0.02 + (v - 0.5) * 0.08})`;
+      ctx.fillRect(sx * 64 + 1, sy * 64 + 1, 62, 62);
+    }
+  }
+  ctx.strokeStyle = 'rgba(30,28,24,0.55)';
+  ctx.lineWidth = 2;
+  for (let i = 0; i <= 4; i += 1) {
+    ctx.beginPath(); ctx.moveTo(i * 64, 0); ctx.lineTo(i * 64, 256); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(0, i * 64); ctx.lineTo(256, i * 64); ctx.stroke();
+  }
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  tex.wrapS = THREE.RepeatWrapping;
+  tex.wrapT = THREE.RepeatWrapping;
+  // 36 m slab, 4 repeats -> 16 slabs of 2.25 m each, a real pavement grid.
+  tex.repeat.set(4, 4);
+  return tex;
+}
+const roadMatV = new THREE.MeshStandardMaterial({ map: asphaltTexture(1, 15), roughness: 0.35, metalness: 0.25 });
+const roadMatH = new THREE.MeshStandardMaterial({ map: asphaltTexture(15, 1), roughness: 0.35, metalness: 0.25 });
 // The open ground gets a blotch texture (drawn once, hash-placed, no rng)
 // so the big lots stop reading as one flat tan plane. Parameterised by
 // base colour so the sidewalk gets its own tan version.
@@ -326,7 +449,7 @@ const wetGroundMat = new THREE.MeshStandardMaterial({
   roughness: 0.45, metalness: 0.05,
 });
 const wetWalkMat = new THREE.MeshStandardMaterial({
-  map: groundNoiseTexture('#847c6e', 'rgba(40,34,26,0.12)', 'rgba(190,180,150,0.10)', 2),
+  map: sidewalkTexture(),
   roughness: 0.55, metalness: 0.05,
 });
 const wetApronMat = new THREE.MeshStandardMaterial({ color: 0x6a6a66, roughness: 0.5, metalness: 0.05 });
@@ -453,85 +576,99 @@ export function buildCity(scene, rng, cfg) {
   sea.position.set(W.seaX + 55, 0.15, 0);
   group.add(sea);
 
-  // Roads: dark wet strips along every grid line.
+  // Roads: dark wet strips along every grid line, now with a real
+  // asphalt texture (v9 iteration 5, §0) instead of one flat colour.
   for (const c of roadLines) {
-    group.add(wetFlat(W.roadWidth, half * 2, wetRoadMat, c, 0, 0.02));
-    group.add(wetFlat(half * 2, W.roadWidth, wetRoadMat, 0, c, 0.02));
+    group.add(wetFlat(W.roadWidth, half * 2, roadMatV, c, 0, 0.02));
+    group.add(wetFlat(half * 2, W.roadWidth, roadMatH, 0, c, 0.02));
   }
 
-  // Road markings (v9 iteration 3): proper big-city paint, two
-  // InstancedMeshes instead of hundreds of individual dash meshes —
-  // double-yellow centre lines, dashed white lane dividers at ±3.5,
-  // solid white edge lines at ±6.5, and crosswalks at ALL 36
-  // intersections. The paint breaks at every intersection (the crosswalk
-  // zone), exactly like a real street. No rng: pure grid arithmetic.
+  // Road markings (v9 iteration 5, §0 — the 20 m roads): proper
+  // big-city paint, two InstancedMeshes instead of hundreds of individual
+  // dash meshes — double-yellow centre lines at ±0.6, dashed white lane
+  // dividers at ±5, solid white edge lines at ±9.5, crosswalks at ALL 36
+  // intersections, and stop lines at the six signalled junctions. The
+  // paint breaks at every intersection (the crosswalk zone), exactly
+  // like a real street. No rng: pure grid arithmetic.
   {
     const yellow = [];
     const white = [];
     const segs = [];
     for (let i = 0; i < roadLines.length - 1; i += 1) {
-      segs.push([roadLines[i] + 9.5, roadLines[i + 1] - 9.5]);
+      segs.push([roadLines[i] + 12, roadLines[i + 1] - 12]);
     }
     for (const c of roadLines) {
       for (const [a, b] of segs) {
         const len = b - a;
         const mid = (a + b) / 2;
         // Vertical road (runs along z at x = c).
-        yellow.push({ x: c - 0.4, z: mid, w: 0.25, l: len });
-        yellow.push({ x: c + 0.4, z: mid, w: 0.25, l: len });
-        white.push({ x: c - 6.5, z: mid, w: 0.25, l: len });
-        white.push({ x: c + 6.5, z: mid, w: 0.25, l: len });
+        yellow.push({ x: c - 0.6, z: mid, w: 0.25, l: len });
+        yellow.push({ x: c + 0.6, z: mid, w: 0.25, l: len });
+        white.push({ x: c - 9.5, z: mid, w: 0.25, l: len });
+        white.push({ x: c + 9.5, z: mid, w: 0.25, l: len });
         // Horizontal road (runs along x at z = c).
-        yellow.push({ x: mid, z: c - 0.4, w: len, l: 0.25 });
-        yellow.push({ x: mid, z: c + 0.4, w: len, l: 0.25 });
-        white.push({ x: mid, z: c - 6.5, w: len, l: 0.25 });
-        white.push({ x: mid, z: c + 6.5, w: len, l: 0.25 });
+        yellow.push({ x: mid, z: c - 0.6, w: len, l: 0.25 });
+        yellow.push({ x: mid, z: c + 0.6, w: len, l: 0.25 });
+        white.push({ x: mid, z: c - 9.5, w: len, l: 0.25 });
+        white.push({ x: mid, z: c + 9.5, w: len, l: 0.25 });
       }
-      // Dashed lane dividers, kept clear of the crosswalk zone (±12).
-      for (let t = -half + 12; t < half - 8; t += 10) {
+      // Dashed lane dividers, kept clear of the crosswalk zone (±14).
+      for (let t = -half + 14; t < half - 8; t += 10) {
         let near = false;
-        for (const l of roadLines) if (Math.abs(t - l) < 12) { near = true; break; }
+        for (const l of roadLines) if (Math.abs(t - l) < 14) { near = true; break; }
         if (near) continue;
-        white.push({ x: c - 3.5, z: t, w: 0.3, l: 3 });
-        white.push({ x: c + 3.5, z: t, w: 0.3, l: 3 });
-        white.push({ x: t, z: c - 3.5, w: 3, l: 0.3 });
-        white.push({ x: t, z: c + 3.5, w: 3, l: 0.3 });
+        white.push({ x: c - 5, z: t, w: 0.3, l: 3 });
+        white.push({ x: c + 5, z: t, w: 0.3, l: 3 });
+        white.push({ x: t, z: c - 5, w: 3, l: 0.3 });
+        white.push({ x: t, z: c + 5, w: 3, l: 0.3 });
       }
     }
     // Crosswalks at every intersection (the old per-junction boxes are gone).
     for (const rx of roadLines) {
       for (const rz of roadLines) {
         for (let s = -2; s <= 2; s += 1) {
-          white.push({ x: rx + s * 2.2, z: rz - 9.5, w: 0.9, l: 3.2 });
-          white.push({ x: rx + s * 2.2, z: rz + 9.5, w: 0.9, l: 3.2 });
-          white.push({ x: rx - 9.5, z: rz + s * 2.2, w: 3.2, l: 0.9 });
-          white.push({ x: rx + 9.5, z: rz + s * 2.2, w: 3.2, l: 0.9 });
+          white.push({ x: rx + s * 4.4, z: rz - 12.5, w: 0.9, l: 3.2 });
+          white.push({ x: rx + s * 4.4, z: rz + 12.5, w: 0.9, l: 3.2 });
+          white.push({ x: rx - 12.5, z: rz + s * 4.4, w: 3.2, l: 0.9 });
+          white.push({ x: rx + 12.5, z: rz + s * 4.4, w: 3.2, l: 0.9 });
         }
       }
+    }
+    // Stop lines at the six signalled junctions: one solid bar across
+    // each approach, 2 m before the crosswalk.
+    for (const j of cfg.lights.junctions) {
+      white.push({ x: j.x, z: j.z - 14.5, w: 19, l: 0.6 });
+      white.push({ x: j.x, z: j.z + 14.5, w: 19, l: 0.6 });
+      white.push({ x: j.x - 14.5, z: j.z, w: 0.6, l: 19 });
+      white.push({ x: j.x + 14.5, z: j.z, w: 0.6, l: 19 });
     }
     group.add(instancedBoxes(yellow, 0xe8c832, 0.05, 0.05));
     group.add(instancedBoxes(white, 0xf2f2f2, 0.05, 0.05));
   }
 
-  // Sidewalk slabs around each block, with a raised curb edge on the road
-  // side so the pavement reads as a pavement, not a paint colour.
+  // Sidewalk slabs around each block (v9 iteration 5, §0): the slab is
+  // exactly the block (36 m), so its edge meets the road at ±18 and the
+  // frontage of every building sits flush on it — no bare dirt gap
+  // between the road and the buildings. The slab texture is a real
+  // paving grid, and the curb below is a raised concrete edge.
   for (const bx of blockCenters) {
     for (const bz of blockCenters) {
-      group.add(wetFlat(W.blockSize + 6, W.blockSize + 6, wetWalkMat, bx, bz, 0.03));
+      group.add(wetFlat(W.blockSize, W.blockSize, wetWalkMat, bx, bz, 0.03));
     }
   }
 
-  // Real curbs (v9 iteration 3): thin raised concrete edges along each
-  // block's sidewalk, at the road's edge (21 from the block centre), one
-  // InstancedMesh. No collision — the player steps over them, as in v8.
+  // Real curbs (v9 iteration 5, §0): thin raised concrete edges along
+  // each block's sidewalk, at the road's edge (18 from the block
+  // centre), one InstancedMesh. No collision — the player steps over
+  // them, as in v8.
   {
     const curbs = [];
     for (const bx of blockCenters) {
       for (const bz of blockCenters) {
-        curbs.push({ x: bx - 21, z: bz, w: 0.3, l: 42 });
-        curbs.push({ x: bx + 21, z: bz, w: 0.3, l: 42 });
-        curbs.push({ x: bx, z: bz - 21, w: 42, l: 0.3 });
-        curbs.push({ x: bx, z: bz + 21, w: 42, l: 0.3 });
+        curbs.push({ x: bx - 18, z: bz, w: 0.3, l: 36 });
+        curbs.push({ x: bx + 18, z: bz, w: 0.3, l: 36 });
+        curbs.push({ x: bx, z: bz - 18, w: 36, l: 0.3 });
+        curbs.push({ x: bx, z: bz + 18, w: 36, l: 0.3 });
       }
     }
     group.add(instancedBoxes(curbs, 0x8a8578, 0.075, 0.15));
@@ -547,6 +684,10 @@ export function buildCity(scene, rng, cfg) {
     tower: { x: 0, z: 0, name: 'Fuego Tower' },
     plaza: { x: 56, z: 0, name: 'Neon Plaza' },
     boardwalk: { x: 158, z: 0, name: 'Boardwalk' },
+    // v9 iteration 5 (§3): the outfit shop and the island district, both
+    // real places the player can walk to — the map markers point here.
+    outfit: { x: 160, z: -28, name: 'Butik Neon' },
+    island: { x: 247, z: 100, name: 'Pulau Fuego' },
   };
 
   // Blocks that never get a random building: the landmark blocks (computed
@@ -716,13 +857,19 @@ export function buildCity(scene, rng, cfg) {
       if (skipBlocks.has(`${bx},${bz}`)) continue;
       const style = districtAt(bx, bz).style;
       const styleDef = DISTRICT_STYLES[style];
-      const count = style === 'glass' || style === 'commercial' ? rng.int(1, 2) : rng.int(2, 4);
+      // v9 iteration 5 (§0): denser — the city was still reading empty
+      // between the towers. Glass/commercial blocks now get 2-3 buildings
+      // and the rest 3-5, footprints capped at 16 m (the sidewalk edge is
+      // 18 from the block centre, so nothing overhangs the pavement) and
+      // offsets pulled in to ±8 so buildings sit in a tight organic
+      // cluster instead of a sparse ring.
+      const count = style === 'glass' || style === 'commercial' ? rng.int(2, 3) : rng.int(3, 5);
       for (let i = 0; i < count; i += 1) {
-        const w = rng.range(10, 18);
-        const d = rng.range(10, 18);
+        const w = rng.range(10, 16);
+        const d = rng.range(10, 16);
         const h = rng.range(styleDef.heights[0], styleDef.heights[1]);
-        const ox = bx + rng.range(-10, 10);
-        const oz = bz + rng.range(-10, 10);
+        const ox = bx + rng.range(-8, 8);
+        const oz = bz + rng.range(-8, 8);
         raiseBuilding(ox, oz, w, d, h, style, Math.floor(rng.next() * styleDef.palette.length));
       }
     }
@@ -1113,6 +1260,222 @@ export function buildCity(scene, rng, cfg) {
   raiseFixedBuilding(84, 166, 12, 12, 15, 'commercial', 0);
   raiseFixedBuilding(132, 166, 12, 12, 11, 'brick', 2);
 
+  // v9 iteration 5 (§0): DENSE CITY FILL — ground-floor commercial in
+  // the gaps the random buildings left. Small shops (8x8, 6-12 m) at the
+  // corners and edge-midpoints of every non-skip block, each facing the
+  // nearest road (the shopfront — glass, lit displays, awning, lit sign
+  // — is on the +z face of its local group, rotated to face the road).
+  // Zero rng: every decision is a hash of the shop's own coordinates, so
+  // the rng stream — and every layout that depends on it — is untouched.
+  // A shop is placed only if it clears every other building (1 m
+  // margin), the protected gameplay rects, and the package spots.
+  const SHOP_NAMES = [
+    'BENGKEL JAYA', 'MINIMARKET 24', 'WARUNG KOPI', 'TOKO KELONTONG',
+    'CAFE SENJA', 'LAUNDRY KILAT', 'BARBERSHOP', 'ROTI BAKAR',
+    'CUCI MOTOR', 'KEDAI MIE', 'TOKO BANGUNAN', 'BENGKEL LAS',
+    'WARUNG NASI', 'TOKO HP', 'APOTEK SEHAT', 'KIOS PULSA',
+    'CAFE PANTAI', 'TOKO BUNGA',
+  ];
+  const SHOP_BG = ['#2a2a2a', '#1a5a2a', '#5a3a1a', '#3a2a5a', '#5a2a3a', '#1a3a5a'];
+  const SHOP_FG = ['#ffd23e', '#ffffff', '#ffe9a8', '#7dffd8', '#ffb27a', '#7dd8ff'];
+  const PROTECTED_RECTS = [
+    { x0: -118, x1: -106, z0: 55, z1: 90 },   // mission-1 walk corridor
+    { x0: 118, x1: 152, z0: 120, z1: 145 },  // docks duel rect
+    { x0: -118, x1: -84, z0: 48, z1: 70 },   // dialogue foreground
+    { x0: -140, x1: -116, z0: 28, z1: 52 },  // gun shop (12 m clear)
+    { x0: 84, x1: 108, z0: 100, z1: 124 },   // Pay 'n' Spray (12 m clear)
+  ];
+  const PACKAGE_SPOTS = [
+    [-98, 96], [-98, -92], [160, 40], [128, 118], [146, -20],
+    [20, 20], [62, -68], [-14, 118], [-40, -108], [70, 70],
+  ];
+  function rectClear(x, z, w, d, margin) {
+    for (const b of buildingRecords) {
+      if (Math.abs(x - b.x) * 2 < w + b.w + margin * 2 && Math.abs(z - b.z) * 2 < d + b.d + margin * 2) return false;
+    }
+    for (const r of PROTECTED_RECTS) {
+      if (x + w / 2 + margin > r.x0 && x - w / 2 - margin < r.x1 && z + d / 2 + margin > r.z0 && z - d / 2 - margin < r.z1) return false;
+    }
+    for (const [px, pz] of PACKAGE_SPOTS) {
+      if (Math.hypot(x - px, z - pz) < 10) return false;
+    }
+    return true;
+  }
+  function raiseShop(ox, oz, w, d, h, style, colorIdx, facing, signText) {
+    const styleDef = DISTRICT_STYLES[style];
+    const color = styleDef.palette[colorIdx % styleDef.palette.length];
+    const g = new THREE.Group();
+    g.position.set(ox, 0, oz);
+    g.rotation.y = facing;
+    const ftex = facadeTexture(style, color).clone();
+    ftex.needsUpdate = true;
+    ftex.repeat.set(Math.max(1, Math.round(w / 6)), Math.max(1, Math.round(h / 9)));
+    const etex = facadeEmissiveTexture(style, color).clone();
+    etex.needsUpdate = true;
+    etex.repeat.copy(ftex.repeat);
+    const frontMat = new THREE.MeshStandardMaterial({
+      map: ftex, emissiveMap: etex, emissive: 0xffffff,
+      emissiveIntensity: cfg.graphics.facadeEmissive, roughness: 0.9,
+    });
+    const roofMat = cityMat(0x555a60, 0.9);
+    const b = new THREE.Mesh(
+      new THREE.BoxGeometry(w, h, d),
+      [frontMat, frontMat, roofMat, roofMat, frontMat, frontMat],
+    );
+    b.position.set(0, h / 2, 0);
+    b.castShadow = true;
+    b.receiveShadow = true;
+    g.add(b);
+    const rim = box(w + 0.6, 0.5, d + 0.6, styleDef.trim, 0, h + 0.25, 0);
+    rim.castShadow = false;
+    g.add(rim);
+    // Shopfront on the +z face: dark glass, two lit display windows, a
+    // striped awning, and the lit shop sign above the door.
+    const glass = new THREE.Mesh(
+      new THREE.BoxGeometry(w * 0.72, 2.6, 0.5),
+      cityMat(0x1a2a33, 0.15, 0.6),
+    );
+    glass.position.set(0, 1.3, d / 2 + 0.25);
+    g.add(glass);
+    for (const dx of [-w * 0.17, w * 0.17]) {
+      const display = new THREE.Mesh(
+        new THREE.PlaneGeometry(w * 0.26, 1.6),
+        new THREE.MeshBasicMaterial({ color: hash01(ox, oz, 81) < 0.5 ? new THREE.Color(1.6, 1.0, 0.45) : new THREE.Color(1.8, 1.5, 0.85) }),
+      );
+      display.position.set(dx, 1.4, d / 2 + 0.52);
+      g.add(display);
+    }
+    const awnTex = AWNING_TEXTURES[Math.floor(hash01(ox, oz, 82) * AWNING_TEXTURES.length)].clone();
+    awnTex.needsUpdate = true;
+    awnTex.repeat.set(3, 1);
+    const awning = new THREE.Mesh(
+      new THREE.PlaneGeometry(w * 0.78, 1.5),
+      new THREE.MeshStandardMaterial({ map: awnTex, side: THREE.DoubleSide, roughness: 0.9 }),
+    );
+    awning.rotation.x = -0.55;
+    awning.position.set(0, 3.15, d / 2 + 0.85);
+    awning.castShadow = true;
+    g.add(awning);
+    const ci = Math.floor(hash01(ox, oz, 83) * SHOP_BG.length);
+    const sign = new THREE.Mesh(
+      new THREE.PlaneGeometry(w * 0.85, 1.7),
+      new THREE.MeshBasicMaterial({ map: signTexture(signText, SHOP_BG[ci], SHOP_FG[ci]) }),
+    );
+    sign.position.set(0, Math.min(h * 0.55, 9), d / 2 + 0.2);
+    g.add(sign);
+    group.add(g);
+    buildingRecords.push({ x: ox, z: oz, w, d, h, style });
+    return g;
+  }
+  let shopCount = 0;
+  for (const bx of blockCenters) {
+    for (const bz of blockCenters) {
+      if (skipBlocks.has(`${bx},${bz}`)) continue;
+      const style = districtAt(bx, bz).style;
+      // 4 corners (facing one of their two adjacent roads) + 4 edge
+      // midpoints (facing the road straight ahead).
+      const spots = [
+        { dx: -12, dz: -12, face: Math.PI }, { dx: -12, dz: 12, face: -Math.PI / 2 },
+        { dx: 12, dz: -12, face: Math.PI / 2 }, { dx: 12, dz: 12, face: 0 },
+        { dx: -12, dz: 0, face: -Math.PI / 2 }, { dx: 12, dz: 0, face: Math.PI / 2 },
+        { dx: 0, dz: -12, face: Math.PI }, { dx: 0, dz: 12, face: 0 },
+      ];
+      for (let s = 0; s < spots.length; s += 1) {
+        const sp = spots[s];
+        const ox = bx + sp.dx;
+        const oz = bz + sp.dz;
+        if (hash01(bx, bz, 90 + s) >= 0.6) continue;
+        if (!rectClear(ox, oz, 8, 8, 1)) continue;
+        const h = 6 + Math.floor(hash01(bx, bz, 100 + s) * 7);
+        const name = SHOP_NAMES[Math.floor(hash01(bx, bz, 110 + s) * SHOP_NAMES.length)];
+        raiseShop(ox, oz, 8, 8, h, style, Math.floor(hash01(bx, bz, 120 + s) * 3), sp.face, name);
+        shopCount += 1;
+      }
+    }
+  }
+
+  // v9 iteration 5 (§3): Pulau Fuego — a small island district across a
+  // causeway from Fuego Pier. The island is a raised sand platform (top
+  // 1.15, the same height as the pier deck, above the sea's wave crests)
+  // with a grass top and three villas; the causeway deck continues the
+  // pier at the same height to the island. A gate at the causeway's land
+  // end (x 209) has a red-and-white barrier beam that slides up when the
+  // player approaches — the game animates islandGate.beam. The player
+  // walks/drives the pier deck (z 98-102), the causeway and the island;
+  // the game clamps them to that corridor (see game.js groundYAt).
+  let islandGate = null;
+  {
+    const isl = cfg.island;
+    // Sand platform: a box, not a plane, so the 1.15 m bluff reads from
+    // the beach and the waves wash against its sides.
+    const platform = new THREE.Mesh(
+      new THREE.BoxGeometry(isl.x1 - isl.x0, 1.15, isl.z1 - isl.z0),
+      cityMat(cfg.palette.sand, 0.95),
+    );
+    platform.position.set((isl.x0 + isl.x1) / 2, 0.575, (isl.z0 + isl.z1) / 2);
+    platform.receiveShadow = true;
+    group.add(platform);
+    // Grass top, inset 2 m from the bluff edge.
+    group.add(flat(isl.x1 - isl.x0 - 4, isl.z1 - isl.z0 - 4, cfg.palette.grass, (isl.x0 + isl.x1) / 2, (isl.z0 + isl.z1) / 2, 1.16));
+    // Three villas on the island. Their bases sit 1.15 into the
+    // platform, so they read 1.15 shorter — the ground floor is the bluff.
+    raiseFixedBuilding(232, 84, 12, 10, 9, 'residential', 0);
+    raiseFixedBuilding(258, 84, 12, 10, 11, 'brick', 1);
+    raiseFixedBuilding(245, 116, 14, 10, 8, 'stucco', 2);
+    // Causeway deck from the pier's end platform (x 209) to the island
+    // (x 222), 4 m wide like the pier deck, top at 1.15.
+    const deck = new THREE.Mesh(
+      new THREE.BoxGeometry(13, 1.15, 4),
+      cityMat(0x7a5c38, 0.9),
+    );
+    deck.position.set(215.5, 0.575, 100);
+    deck.castShadow = true;
+    deck.receiveShadow = true;
+    group.add(deck);
+    // Rails along both sides of the causeway, at the pier rail height.
+    for (const rz of [98.2, 101.8]) {
+      const rail = new THREE.Mesh(new THREE.BoxGeometry(13, 0.12, 0.12), cityMat(0x5a4630, 0.9));
+      rail.position.set(215.5, 1.9, rz);
+      group.add(rail);
+      for (let px = 210; px <= 221; px += 2.75) {
+        const post = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.06, 0.75, 6), cityMat(0x5a4630, 0.9));
+        post.position.set(px, 1.52, rz);
+        group.add(post);
+      }
+    }
+    // Two lamps on the causeway.
+    for (const lx of [211, 220]) {
+      const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.09, 0.12, 3, 6), cityMat(0x2a2f38, 0.6, 0.5));
+      pole.position.set(lx, 2.65, 98.4);
+      group.add(pole);
+      const bulb = new THREE.Mesh(new THREE.SphereGeometry(0.25, 8, 6), new THREE.MeshBasicMaterial({ color: new THREE.Color(1.6, 1.35, 0.75) }));
+      bulb.position.set(lx, 4.25, 98.4);
+      group.add(bulb);
+    }
+    // The gate at the causeway's land end (x 209): two posts at the deck
+    // edges + a red-and-white barrier beam that slides up on approach.
+    const gate = new THREE.Group();
+    gate.position.set(isl.gate.x, 1.15, isl.gate.z);
+    for (const pz of [-1.7, 1.7]) {
+      const post = new THREE.Mesh(new THREE.BoxGeometry(0.4, 2.6, 0.4), cityMat(0xd8d8d8, 0.7));
+      post.position.set(0, 1.3, pz);
+      post.castShadow = true;
+      gate.add(post);
+    }
+    const beam = new THREE.Group();
+    beam.position.y = 1.0;
+    const beamRed = new THREE.Mesh(new THREE.BoxGeometry(0.25, 0.3, 3.4), new THREE.MeshStandardMaterial({ color: 0xc23b2e, roughness: 0.6 }));
+    beam.add(beamRed);
+    for (let s = -1.5; s <= 1.5; s += 1) {
+      const stripe = new THREE.Mesh(new THREE.BoxGeometry(0.27, 0.32, 0.7), new THREE.MeshStandardMaterial({ color: 0xf2f2f2, roughness: 0.6 }));
+      stripe.position.z = s;
+      beam.add(stripe);
+    }
+    gate.add(beam);
+    group.add(gate);
+    islandGate = { group: gate, beam, open: 0 };
+  }
+
   // v9 rooftop clutter: AC boxes, vent pipes, satellite dishes and neon
   // roof strips, so the skyline stops reading as flat slabs. Instanced —
   // one draw call per type for the whole city. Placement is a pure hash
@@ -1234,10 +1597,12 @@ export function buildCity(scene, rng, cfg) {
   // benches and crossing paths. Palm Gardens in the north-west (the
   // safehouse sits on its edge) and Coral Park by the hospital.
   function buildPark(cx, cz) {
-    group.add(flat(W.blockSize + 4, W.blockSize + 4, cfg.palette.grass, cx, cz, 0.04));
+    // v9 iteration 5 (§0): the park grass is exactly the block (36 m),
+    // so it no longer spills over the road edges.
+    group.add(flat(W.blockSize, W.blockSize, cfg.palette.grass, cx, cz, 0.04));
     // Crossing paths, pale gravel.
-    group.add(flat(4, W.blockSize + 4, 0xd8d3a8, cx, cz, 0.06));
-    group.add(flat(W.blockSize + 4, 4, 0xd8d3a8, cx, cz, 0.06));
+    group.add(flat(4, W.blockSize, 0xd8d3a8, cx, cz, 0.06));
+    group.add(flat(W.blockSize, 4, 0xd8d3a8, cx, cz, 0.06));
     const treeTrunk = cityMat(0x5a4630, 1);
     const treeLeaf = cityMat(0x4a7a3a, 1);
     for (let i = 0; i < 7; i += 1) {
@@ -2243,7 +2608,7 @@ export function buildCity(scene, rng, cfg) {
   // and mission lines. The axis is the launch direction — 'z' launches
   // along the north-south roads, 'x' along the east-west ones.
   const ramps = cfg.stunts.ramps.map((r, i) => {
-    const axis = i === 2 ? 'x' : 'z';
+    const axis = r.axis || 'z';
     const ramp = new THREE.Mesh(
       new THREE.BoxGeometry(5, 0.5, 4),
       new THREE.MeshStandardMaterial({ color: 0xd8a832, roughness: 0.6 }),
@@ -2359,10 +2724,12 @@ export function buildCity(scene, rng, cfg) {
   function setSeason(rainy) {
     if (puddleMesh) puddleMesh.visible = rainy;
     if (poolMesh) poolMesh.visible = rainy;
-    // v9 iteration 4: wet asphalt reads 0.28 with the PMREM environment
+    // v9 iteration 5: wet asphalt reads 0.28 with the PMREM environment
     // map (the brief's 0.25-0.35 wet band); dry streets stay rough.
-    wetRoadMat.roughness = rainy ? 0.28 : 0.92;
-    wetRoadMat.metalness = rainy ? 0.25 : 0.02;
+    roadMatV.roughness = rainy ? 0.28 : 0.92;
+    roadMatV.metalness = rainy ? 0.25 : 0.02;
+    roadMatH.roughness = rainy ? 0.28 : 0.92;
+    roadMatH.metalness = rainy ? 0.25 : 0.02;
     wetGroundMat.roughness = rainy ? 0.45 : 0.95;
     wetWalkMat.roughness = rainy ? 0.55 : 0.95;
     wetApronMat.roughness = rainy ? 0.5 : 0.9;
@@ -2373,7 +2740,7 @@ export function buildCity(scene, rng, cfg) {
     lightHeads, stallSpots, barrels, buildingCount: buildingRecords.length, setSeason,
     // v9 iteration 4: destructible props, stunt ramps, instanced counts,
     // and the wind/sea updaters for the day cycle.
-    destructibles, ramps, updateWind, updateSea,
+    destructibles, ramps, updateWind, updateSea, islandGate,
     instancedCounts: {
       palms: palmSpots.length,
       lamps: lampSpots.length,

@@ -44,6 +44,8 @@ export function createHud() {
   const repFill = document.getElementById('hud-repfill');
   const repText = document.getElementById('hud-reptext');
   const packagesEl = document.getElementById('hud-packages');
+  const medalsEl = document.getElementById('hud-medals');
+  const skillsEl = document.getElementById('hud-skills');
   const speedEl = document.getElementById('hud-speed');
   const carEl = document.getElementById('hud-car');
   const conditionEl = document.getElementById('hud-condition');
@@ -108,7 +110,9 @@ export function createHud() {
     objectiveEl.textContent = state.objective;
     distEl.textContent = state.targetDist != null ? `${Math.round(state.targetDist)} m` : '';
     const season = state.season ? ` · ${state.season}` : '';
-    clockEl.textContent = `${clockText(state.clockHour, state.day)}${season}`;
+    // v9 iteration 5 (§5): the weekday leads the clock ("FRI · DAY 1 · 18:24").
+    const weekday = state.weekday ? `${state.weekday} · ` : '';
+    clockEl.textContent = `${weekday}${clockText(state.clockHour, state.day)}${season}`;
     if (progressEl) progressEl.style.width = `${Math.round((state.progress || 0) * 100)}%`;
     if (nextEl) {
       nextEl.textContent = state.nextMission ? `NEXT: ${state.nextMission}` : '';
@@ -155,8 +159,11 @@ export function createHud() {
     }
 
     // Bottom-left: district over the minimap, health / armour / rep bars
-    // under it, package count below that.
-    districtEl.textContent = state.district || '';
+    // under it, package count below that. v9 iteration 5 (§3/§5): the
+    // street underfoot leads the district ("Jalan Fuego · DOWNTOWN"),
+    // the REP bar fills toward the NEXT rank, the rank name shows, and
+    // the medals + skill levels get their own lines.
+    districtEl.textContent = state.street ? `${state.street} · ${state.district || ''}` : (state.district || '');
     const hp = Math.max(0, Math.round(state.health));
     healthFill.style.width = `${hp}%`;
     healthFill.style.background = barColor(hp);
@@ -169,12 +176,19 @@ export function createHud() {
     if (armourText) armourText.textContent = `⛨ ${ar}`;
     const rep = Math.max(0, Math.round(state.rep || 0));
     if (repFill) {
-      repFill.style.width = `${Math.min(100, rep)}%`;
+      repFill.style.width = `${Math.round((state.repProgress ?? 0) * 100)}%`;
       repFill.style.background = '#c98ae0';
     }
-    if (repText) repText.textContent = `REP ${rep}`;
+    if (repText) repText.textContent = state.repRank ? `REP ${rep} · ${state.repRank}` : `REP ${rep}`;
     if (packagesEl) {
       packagesEl.textContent = `◆ PACKAGES ${state.packages || 0}/${state.packagesTotal || 10}`;
+    }
+    if (medalsEl) {
+      medalsEl.textContent = `● MEDALS ${state.medals || 0}/${state.medalsTotal || 24}`;
+    }
+    if (skillsEl && state.skills) {
+      const s = state.skills;
+      skillsEl.textContent = `DRV ${s.driving} · STA ${s.stamina} · AIM ${s.aim} · STL ${s.stealth} · INF ${s.influence} · STR ${s.street}`;
     }
 
     // Bottom-right speedo: big speed, car name + gear, vehicle condition,
@@ -236,15 +250,40 @@ export function createHud() {
 
   // The shared map base: sea, sand, roads, blocks, parks, landmarks. Both
   // the minimap and the full city map draw from it, so they can never drift.
-  function drawMapBase(ctx, size, world) {
-    const half = world.half + 20;
+  // `half` is the map's half-range in metres: the minimap covers ±190
+  // (reaches the sea), the big map ±300 (reaches Pulau Fuego).
+  function drawMapBase(ctx, size, world, half) {
     const toMap = (x, z) => [((x + half) / (half * 2)) * size, ((z + half) / (half * 2)) * size];
     ctx.fillStyle = 'rgba(10, 18, 26, 0.92)';
     ctx.fillRect(0, 0, size, size);
+    // Sea east of the beach (x > 172) and the sand strip (x 142–172),
+    // positioned in world coords so the shoreline never drifts when the
+    // map range grows.
+    const [seaX] = toMap(172, 0);
     ctx.fillStyle = '#1c4a6b';
-    ctx.fillRect(size * 0.86, 0, size * 0.14, size);
+    ctx.fillRect(Math.max(0, seaX), 0, size - Math.max(0, seaX), size);
+    const [sandX] = toMap(142, 0);
     ctx.fillStyle = '#e6d3a3';
-    ctx.fillRect(size * 0.82, 0, size * 0.04, size);
+    ctx.fillRect(Math.max(0, sandX), 0, Math.max(0, seaX - sandX), size);
+    // Fuego Pier (x 168–209, z 98–102) + causeway (x 209–222) as one
+    // sand-coloured line, and Pulau Fuego (x 222–272, z 72–128) as a
+    // grass island with a sand rim. On the minimap the island is
+    // off-canvas and the canvas clips it; the big map shows it whole.
+    const [pier0x, pierZ] = toMap(168, 100);
+    const [pier1x] = toMap(222, 100);
+    ctx.strokeStyle = '#d8c9a0';
+    ctx.lineWidth = Math.max(2, size / 160);
+    ctx.beginPath();
+    ctx.moveTo(pier0x, pierZ);
+    ctx.lineTo(pier1x, pierZ);
+    ctx.stroke();
+    const [isl0x, isl0z] = toMap(222, 72);
+    const [isl1x, isl1z] = toMap(272, 128);
+    ctx.fillStyle = '#3a6a3a';
+    ctx.fillRect(isl0x, isl0z, isl1x - isl0x, isl1z - isl0z);
+    ctx.strokeStyle = '#e6d3a3';
+    ctx.lineWidth = 2;
+    ctx.strokeRect(isl0x, isl0z, isl1x - isl0x, isl1z - isl0z);
     // Parks read green on the map, so the player can find them.
     ctx.fillStyle = '#3a6a3a';
     for (const [px, pz] of [[-112, -112], [56, 112]]) {
@@ -287,8 +326,8 @@ export function createHud() {
   // Police vision cones (v9 iteration 4): a translucent triangle 20 m
   // ahead of each cruiser, widening to 6 m at the far end — the same
   // geometry the 3D cones use, so the map and the world agree.
-  function drawVisionCones(ctx, toMap, world, size) {
-    const scale = size / ((world.half + 20) * 2);
+  function drawVisionCones(ctx, toMap, world, size, half) {
+    const scale = size / (half * 2);
     for (const car of world.policeCars || []) {
       const [mx, mz] = toMap(car.group.position.x, car.group.position.z);
       ctx.save();
@@ -306,14 +345,17 @@ export function createHud() {
   }
 
   // Shops (v9 iteration 4): diamonds — lime for Ammu-Nation, magenta
-  // for Pay 'n' Spray. The big map labels them too.
+  // for Pay 'n' Spray. The big map labels them too. v9 iteration 5: the
+  // spray label hangs BELOW its marker — on the old right-hand side it
+  // printed on top of the East Docks venue label (same z row).
   function drawShops(ctx, toMap, world, label) {
     if (!world.shops) return;
     const defs = [
-      { s: world.shops.gun, color: '#8aff5a', name: 'AMMU-NATION' },
-      { s: world.shops.spray, color: '#ff5aff', name: "PAY 'N' SPRAY" },
+      { s: world.shops.gun, color: '#8aff5a', name: 'AMMU-NATION', lx: 8, ly: 4, align: 'left' },
+      { s: world.shops.spray, color: '#ff5aff', name: "PAY 'N' SPRAY", lx: 8, ly: 22, align: 'left' },
     ];
-    for (const { s, color, name } of defs) {
+    for (const def of defs) {
+      const { s, color, name } = def;
       const [mx, mz] = toMap(s.x, s.z);
       ctx.fillStyle = color;
       ctx.beginPath();
@@ -326,20 +368,23 @@ export function createHud() {
       if (label) {
         ctx.fillStyle = color;
         ctx.font = 'bold 13px system-ui, sans-serif';
-        ctx.fillText(name, mx + 8, mz + 4);
+        ctx.textAlign = def.align;
+        ctx.fillText(name, mx + def.lx, mz + def.ly);
+        ctx.textAlign = 'left';
       }
     }
   }
 
   function drawMinimap(world) {
     const size = 200;
+    const half = world.half + 40; // ±190: reaches the sea (x 172) and the pier start.
     const ctx = mapCtx;
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    const toMap = drawMapBase(ctx, size, world);
+    const toMap = drawMapBase(ctx, size, world, half);
     // Police search zone: the circle the heat cools outside of.
     if (world.searchZone) {
       const [zx, zy] = toMap(world.searchZone.x, world.searchZone.z);
-      const zr = (world.searchZone.r / ((world.half + 20) * 2)) * size;
+      const zr = (world.searchZone.r / (half * 2)) * size;
       ctx.strokeStyle = 'rgba(255, 90, 74, 0.9)';
       ctx.lineWidth = 2;
       ctx.beginPath();
@@ -392,7 +437,7 @@ export function createHud() {
       ctx.arc(mx, mz, 3.5, 0, Math.PI * 2);
       ctx.fill();
     }
-    drawVisionCones(ctx, toMap, world, size);
+    drawVisionCones(ctx, toMap, world, size, half);
     drawShops(ctx, toMap, world, false);
     // Player arrow.
     const [px, pz] = toMap(world.playerX, world.playerZ);
@@ -422,12 +467,13 @@ export function createHud() {
   function drawBigMap(world) {
     if (!bigCtx) return;
     const size = 640;
+    const half = world.half + 150; // ±300: reaches Pulau Fuego (x 272).
     const ctx = bigCtx;
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    const toMap = drawMapBase(ctx, size, world);
+    const toMap = drawMapBase(ctx, size, world, half);
     if (world.searchZone) {
       const [zx, zy] = toMap(world.searchZone.x, world.searchZone.z);
-      const zr = (world.searchZone.r / ((world.half + 20) * 2)) * size;
+      const zr = (world.searchZone.r / (half * 2)) * size;
       ctx.strokeStyle = 'rgba(255, 90, 74, 0.95)';
       ctx.lineWidth = 3;
       ctx.beginPath();
@@ -437,9 +483,12 @@ export function createHud() {
       ctx.fill();
       ctx.fillStyle = '#ff8a7a';
       ctx.font = 'bold 15px system-ui, sans-serif';
-      // Clamped off the top edge: on a big search zone the header used to
-      // touch the frame.
-      ctx.fillText('SEARCH ZONE — leave it to lose the cops', zx + 8, Math.max(24, zy - zr - 6));
+      // Centred inside the top of the circle: the old header sat above
+      // the circle and clipped against the canvas edge on a big zone.
+      const header = 'SEARCH ZONE — leave it to lose the cops';
+      const hw = ctx.measureText(header).width;
+      const hx = Math.max(8, Math.min(zx - hw / 2, size - hw - 8));
+      ctx.fillText(header, hx, Math.max(24, zy - zr + 22));
     }
     drawGpsRoute(ctx, toMap, world);
     // District names, from the config table: label at each district's
@@ -509,8 +558,53 @@ export function createHud() {
       ctx.closePath();
       ctx.fill();
     }
-    drawVisionCones(ctx, toMap, world, size);
+    drawVisionCones(ctx, toMap, world, size, half);
     drawShops(ctx, toMap, world, true);
+    // v9 iteration 5 (§2/§3): courier pickups (gold rings — the active
+    // job's drop is a green ring), race starts (white squares) and
+    // medals (gold dots, once Street Sense is 2+). Finished jobs and
+    // taken medals are not drawn; REP-locked jobs draw dimmed so the
+    // player can see what is coming.
+    if (world.deliveries) {
+      for (const d of world.deliveries) {
+        if (d.done) continue;
+        const [mx, mz] = toMap(d.pickup.x, d.pickup.z);
+        ctx.strokeStyle = d.locked ? 'rgba(255, 210, 62, 0.35)' : '#ffd23e';
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.arc(mx, mz, 6, 0, Math.PI * 2);
+        ctx.stroke();
+        if (d.active) {
+          const [dx, dz] = toMap(d.drop.x, d.drop.z);
+          ctx.strokeStyle = '#7dff8a';
+          ctx.lineWidth = 3;
+          ctx.beginPath();
+          ctx.arc(dx, dz, 8, 0, Math.PI * 2);
+          ctx.stroke();
+        }
+      }
+    }
+    if (world.races) {
+      for (const r of world.races) {
+        if (r.won) continue;
+        const [mx, mz] = toMap(r.start.x, r.start.z);
+        ctx.fillStyle = r.locked ? 'rgba(255, 255, 255, 0.35)' : '#ffffff';
+        ctx.fillRect(mx - 5, mz - 5, 10, 10);
+        ctx.strokeStyle = '#111111';
+        ctx.lineWidth = 1;
+        ctx.strokeRect(mx - 5, mz - 5, 10, 10);
+      }
+    }
+    if (world.showMedals && world.medals) {
+      ctx.fillStyle = '#ffd23e';
+      for (const m of world.medals) {
+        if (m.taken) continue;
+        const [mx, mz] = toMap(m.x, m.z);
+        ctx.beginPath();
+        ctx.arc(mx, mz, 3, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    }
     // Player arrow.
     const [px, pz] = toMap(world.playerX, world.playerZ);
     ctx.save();
@@ -541,6 +635,12 @@ export function createHud() {
     ctx.fillText('■ named venue', 150, size - 26);
     ctx.fillStyle = '#eaf4ff';
     ctx.fillText('— GPS route', 290, size - 26);
+    ctx.fillStyle = '#ffd23e';
+    ctx.fillText('○ delivery pickup', 410, size - 26);
+    ctx.fillStyle = '#ffffff';
+    ctx.fillText('□ race start', 410, size - 46);
+    ctx.fillStyle = '#ffd23e';
+    ctx.fillText('● medal', 540, size - 46);
   }
 
   return { update, drawMinimap, drawBigMap, showMessage, showAutosave, clockText };
