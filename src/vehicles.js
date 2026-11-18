@@ -10,6 +10,7 @@
 // police Interceptor. All geometry is shared and cached, so 26 cars cost a
 // handful of draw programs, not one per spoke.
 import * as THREE from 'three';
+import { lightFor } from './trafficlights.js';
 
 // One spec per paint colour. kind drives the body shape; extras are
 // per-model flags. wheelR is the wheel radius, rideH the body ride height.
@@ -127,7 +128,7 @@ let checkerTex = null;
 
 // Per-model extras, table-driven: each flag adds its meshes to the group.
 // Keeping them in one place is what lets a new model stay a one-line spec.
-function addExtras(group, spec, bodyY, cabY, cabH, cabZ, W, L) {
+function addExtras(group, spec, bodyY, cabY, cabH, cabZ, W, L, own) {
   if (spec.wing) {
     group.add(box(W * 0.92, 0.06, 0.42, mat(0x14161a, 0.5, 0.5), 0, bodyY + spec.bodyH / 2 + 0.42, -L / 2 + 0.35));
     for (const sx of [-W * 0.3, W * 0.3]) {
@@ -158,22 +159,33 @@ function addExtras(group, spec, bodyY, cabY, cabH, cabZ, W, L) {
   }
   if (spec.checker) {
     if (!checkerTex) checkerTex = checkerTexture();
-    const bandMat = new THREE.MeshBasicMaterial({ map: checkerTex });
+    // bandMat is owned (per-van), but its map is the SHARED checkerTex —
+    // material.dispose() never frees a map, so the texture survives.
+    const bandMat = own(new THREE.MeshBasicMaterial({ map: checkerTex }));
     for (const side of [-1, 1]) {
-      const band = new THREE.Mesh(new THREE.PlaneGeometry(L * 0.9, 0.28), bandMat);
+      const band = new THREE.Mesh(own(new THREE.PlaneGeometry(L * 0.9, 0.28)), bandMat);
       band.position.set((side * W) / 2 + side * 0.02, bodyY + 0.12, 0);
       band.rotation.y = side < 0 ? -Math.PI / 2 : Math.PI / 2;
       group.add(band);
     }
   }
   if (spec.roofSign) {
-    group.add(box(0.9, 0.22, 0.3, new THREE.MeshBasicMaterial({ color: 0xffd23e }), 0, cabY + cabH / 2 + 0.18, cabZ));
+    group.add(box(0.9, 0.22, 0.3, own(new THREE.MeshBasicMaterial({ color: 0xffd23e })), 0, cabY + cabH / 2 + 0.18, cabZ));
   }
 }
 
 export function makeCarMesh(color, isPolice) {
   const spec = specFor(color, isPolice);
   const group = new THREE.Group();
+  // Per-instance GPU resources this mesh owns (v9 iteration 3, item 12:
+  // memory-leak guard). The factory records every geometry/material it
+  // creates fresh on group.userData.owned. Everything else — the geo() /
+  // mat() caches, GLASS, DARK_GLASS, TIRE_MAT, RIM_MAT, ARCH_MAT, and the
+  // checker texture — is shared by every car in the city and must NEVER be
+  // disposed: freeing one would break all the others. disposeCarMesh below
+  // frees exactly this list, nothing else.
+  group.userData.owned = [];
+  const own = (r) => { group.userData.owned.push(r); return r; };
   const paint = mat(spec.color, 0.32, 0.55);
   const L = spec.length;
   const W = spec.width;
@@ -198,8 +210,8 @@ export function makeCarMesh(color, isPolice) {
   const cabY = bodyY + spec.bodyH / 2 + cabH / 2 - 0.04;
   if (spec.cabin === 'open') {
     const shield = new THREE.Mesh(
-      new THREE.PlaneGeometry(W * 0.8, 0.5),
-      new THREE.MeshStandardMaterial({ color: 0x9fd8ff, roughness: 0.1, metalness: 0.3, transparent: true, opacity: 0.5, side: THREE.DoubleSide }),
+      own(new THREE.PlaneGeometry(W * 0.8, 0.5)),
+      own(new THREE.MeshStandardMaterial({ color: 0x9fd8ff, roughness: 0.1, metalness: 0.3, transparent: true, opacity: 0.5, side: THREE.DoubleSide })),
     );
     shield.position.set(0, cabY + 0.1, cabZ + cabLen / 2 - 0.1);
     shield.rotation.x = -0.35;
@@ -251,24 +263,26 @@ export function makeCarMesh(color, isPolice) {
   }
 
   // Headlights that glow, taillights that read red at dusk.
-  const headMat = new THREE.MeshBasicMaterial({ color: 0xfff6c8 });
+  // Per-car materials (owned — see makeCarMesh) so one car's lights can
+  // be disposed without touching any other car.
+  const headMat = own(new THREE.MeshBasicMaterial({ color: 0xfff6c8 }));
   for (const hx of [-W * 0.32, W * 0.32]) {
     group.add(box(0.34, 0.16, 0.08, headMat, hx, bodyY + 0.08, L / 2 + 0.1));
   }
-  const tailMat = new THREE.MeshBasicMaterial({ color: 0xff2a22 });
+  const tailMat = own(new THREE.MeshBasicMaterial({ color: 0xff2a22 }));
   for (const tx of [-W * 0.32, W * 0.32]) {
     group.add(box(0.34, 0.16, 0.08, tailMat, tx, bodyY + 0.08, -L / 2 - 0.1));
   }
 
-  addExtras(group, spec, bodyY, cabY, cabH, cabZ, W, L);
+  addExtras(group, spec, bodyY, cabY, cabH, cabZ, W, L, own);
 
   let lightBar = null;
   if (isPolice) {
     // Livery: white doors on the dark body.
     for (const sx of [-W / 2 - 0.015, W / 2 + 0.015]) {
       const door = new THREE.Mesh(
-        new THREE.PlaneGeometry(L * 0.42, spec.bodyH * 0.8),
-        new THREE.MeshStandardMaterial({ color: 0xf2f2f2, roughness: 0.4, metalness: 0.3 }),
+        own(new THREE.PlaneGeometry(L * 0.42, spec.bodyH * 0.8)),
+        own(new THREE.MeshStandardMaterial({ color: 0xf2f2f2, roughness: 0.4, metalness: 0.3 })),
       );
       door.position.set(sx, bodyY, 0);
       door.rotation.y = sx < 0 ? -Math.PI / 2 : Math.PI / 2;
@@ -278,20 +292,44 @@ export function makeCarMesh(color, isPolice) {
     group.add(box(W * 0.6, 0.3, 0.1, mat(0x14161a, 0.5, 0.6), 0, bodyY - 0.05, L / 2 + 0.16));
     // Light bar: red and blue halves that flash in the chase (the materials
     // are per-car, so updatePolice can swap their colours).
-    const redMat = new THREE.MeshBasicMaterial({ color: 0xff2222 });
-    const blueMat = new THREE.MeshBasicMaterial({ color: 0x2244ff });
+    const redMat = own(new THREE.MeshBasicMaterial({ color: 0xff2222 }));
+    const blueMat = own(new THREE.MeshBasicMaterial({ color: 0x2244ff }));
     const barBase = box(1.1, 0.1, 0.5, mat(0x14161a, 0.5, 0.6), 0, cabY + cabH / 2 + 0.1, cabZ);
     group.add(barBase);
-    const segL = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.2, 0.46), redMat);
+    const segL = new THREE.Mesh(own(new THREE.BoxGeometry(0.5, 0.2, 0.46)), redMat);
     segL.position.set(-0.28, cabY + cabH / 2 + 0.22, cabZ);
     group.add(segL);
-    const segR = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.2, 0.46), blueMat);
+    const segR = new THREE.Mesh(own(new THREE.BoxGeometry(0.5, 0.2, 0.46)), blueMat);
     segR.position.set(0.28, cabY + cabH / 2 + 0.22, cabZ);
     group.add(segR);
     lightBar = { left: redMat, right: blueMat };
   }
 
   return { group, wheels, driver, lightBar };
+}
+
+// Dispose the per-instance GPU resources of a car mesh built by
+// makeCarMesh, before the group leaves the scene (v9 iteration 3, item 12:
+// memory-leak guard). Frees exactly group.userData.owned — the geometries
+// and materials the factory created fresh for this car — and nothing else.
+// Shared resources (the geo()/mat() caches, GLASS, TIRE_MAT, RIM_MAT,
+// ARCH_MAT) are never in that list, so no other car is affected. A
+// material's .dispose() never frees its map, so the shared checker texture
+// survives a van's disposal. Safe to call twice (the list is cleared).
+// Callers: spawnPlayerCar eviction (V), resprayCar, and the police
+// removals in police.js (clearRoadblocks / ensurePolice shrink /
+// clearPolice). People meshes need no such call — every geometry and
+// material in makePersonMesh comes from its shared caches.
+export function disposeCarMesh(group) {
+  const owned = group && group.userData ? group.userData.owned : null;
+  if (!owned || !owned.length) return;
+  const seen = new Set();
+  for (const r of owned) {
+    if (!r || seen.has(r)) continue;
+    seen.add(r);
+    r.dispose();
+  }
+  group.userData.owned = [];
 }
 
 export function createCar(scene, x, z, heading, color, isPolice, cruiseSpeed) {
@@ -404,9 +442,31 @@ export function updateTrafficCar(car, dt, cars, cfg, pedestrians) {
       }
     }
   }
-  // Traffic AI is v5, unchanged: cruise, brake for what is ahead, turn
-  // at junctions on a seeded coin flip. The traffic lights are dressing —
-  // they cycle on the poles — but the drivers do not read them.
+  // v9 iteration 3: the drivers read the lights. A red light ahead (or a
+  // yellow one far enough out to stop) brings the car to a halt at the
+  // stop line; a car already inside the intersection keeps going, and a
+  // yellow too close to stop for is driven through. The light clock is
+  // game time, so the behaviour is deterministic.
+  if (target > 0) {
+    const light = lightFor(r.axis);
+    if (light !== 'green') {
+      const pos = r.axis === 'x' ? car.group.position.x : car.group.position.z;
+      let nearestAhead = Infinity;
+      for (const j of cfg.lights.junctions) {
+        const onLine = r.axis === 'x' ? j.z === r.line : j.x === r.line;
+        if (!onLine) continue;
+        const ahead = ((r.axis === 'x' ? j.x : j.z) - pos) * r.dir;
+        if (ahead > 0 && ahead < nearestAhead) nearestAhead = ahead;
+      }
+      const stopDist = cfg.lights.stopDistance;
+      if (nearestAhead <= stopDist && nearestAhead > 3) {
+        if (light === 'red' || nearestAhead > 6) target = 0;
+      }
+    }
+  }
+  // Traffic AI: cruise, brake for what is ahead, turn at junctions on a
+  // seeded coin flip, and now stop at red lights. The same seed always
+  // turns the same way at the same junction.
   car.speed += (target - car.speed) * Math.min(1, dt * 2);
   if (!Number.isFinite(car.speed)) car.speed = 0;
   const step = car.speed * r.dir * dt;

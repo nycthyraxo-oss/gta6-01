@@ -18,13 +18,13 @@ import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 import { CONFIG, MISSION_DEFS, STORY_INTRO } from './config.js';
 import { createRandom } from './random.js';
 import { buildCity, districtAt } from './city.js';
-import { createCar, spawnTrafficCar, updateTrafficCar, createSkids, randomCarColor, makeCarMesh, spinWheels, steerWheels, SPECS } from './vehicles.js';
+import { createCar, spawnTrafficCar, updateTrafficCar, createSkids, randomCarColor, makeCarMesh, disposeCarMesh, spinWheels, steerWheels, SPECS } from './vehicles.js';
 import { makePersonMesh, spawnPedestrian, spawnVendor, updatePedestrian, spawnEnemy, updateEnemy } from './people.js';
 import { createWanted, addHeat, setStars, ensurePolice, updatePolice, clearPolice, pursuers } from './police.js';
 import { createMissions, startMission, updateMission, completeMission, failMission, currentMission, currentTarget, missionObjectiveText, stageLabel, missionProgress, nextMissionTitle, advanceDialogue, DIALOGUE_LINE_SECONDS } from './missions.js';
 import { createAudio } from './audio.js';
 import { createHud } from './hud.js';
-import { createInput, ACTION_ENTER, ACTION_SHOOT, ACTION_PAUSE, ACTION_MUTE, ACTION_RESTART, ACTION_CONFIRM, ACTION_MAP, ACTION_RADIO, ACTION_NIGHT, ACTION_SPAWN_CAR } from './input.js';
+import { createInput, ACTION_ENTER, ACTION_SHOOT, ACTION_PAUSE, ACTION_MUTE, ACTION_RESTART, ACTION_CONFIRM, ACTION_MAP, ACTION_RADIO, ACTION_NIGHT, ACTION_SPAWN_CAR, ACTION_WEAPON_1, ACTION_WEAPON_2, ACTION_WEAPON_3 } from './input.js';
 import { createPackages } from './packages.js';
 import { updateLights, lightFor } from './trafficlights.js';
 
@@ -187,9 +187,16 @@ export function createGame(canvas, seed) {
     scene.add(m);
     splashRings.push({ mesh: m, age: rainRng.next() * 0.6, life: 0.6, x: 0, z: 0 });
   }
+  // The season flag (v9 iteration 3): true while the current day is a
+  // rainy day. applySeason() owns it; scatterRain/updateRain read it
+  // instead of state.day, because scatterRain runs once at boot — before
+  // `const state` is initialised — and reading state there throws.
+  let seasonRainy = true;
   function scatterRain() {
     // (Re)scatter every streak in the box around the camera — used once
     // at boot and once per staged shot, so the frame is full of rain.
+    // Dry season: no rain to scatter.
+    if (!seasonRainy) return;
     const cx = camera.position.x;
     const cz = camera.position.z;
     for (let i = 0; i < RAIN_COUNT; i += 1) {
@@ -200,7 +207,28 @@ export function createGame(canvas, seed) {
     rainGeo.attributes.position.needsUpdate = true;
   }
   scatterRain();
+  // Two seasons (v9 iteration 3): MUSIM HUJAN on odd days, MUSIM KEMARAU
+  // on even days. A pure function of state.day — deterministic, no rng,
+  // no clock. Rain, puddles, lamp pools and wet shine live only in the
+  // rainy season; the dry season keeps the clear pink dusk. Applied
+  // whenever the day changes; cheap no-op otherwise.
+  let appliedRainy = null;
+  function applySeason() {
+    const rainy = state.day % 2 === 1;
+    if (appliedRainy === rainy) return;
+    const wasDry = appliedRainy === false;
+    appliedRainy = rainy;
+    seasonRainy = rainy;
+    rain.visible = rainy;
+    for (const ring of splashRings) ring.mesh.visible = false;
+    city.setSeason(rainy);
+    // Coming back from a dry stretch the streaks are stale around an old
+    // camera spot — re-scatter them so the rain is full in one frame.
+    if (rainy && wasDry) scatterRain();
+  }
   function updateRain(dt) {
+    // Dry season: no rain falls, no rings, no rng consumed.
+    if (!seasonRainy) return;
     const cx = camera.position.x;
     const cz = camera.position.z;
     const bx = cfg.rain.boxX;
@@ -289,8 +317,72 @@ export function createGame(canvas, seed) {
     shootCooldown: 0,
     bob: 0,
     dead: false,
+    // Jump (v9 iteration 3): vertical velocity + grounded flag. The mesh
+    // y is 0 while grounded; the jump is one velocity + one gravity, and
+    // landing is exactly y = 0 — no hover, no sinking.
+    vy: 0,
+    grounded: true,
+    // Weapons (v9 iteration 3): 0 pistol, 1 knife, 2 bazooka.
+    weapon: 0,
+    rockets: cfg.weapons.bazooka.rockets,
+    swingT: 0,
+    prevBrake: false,
   };
   playerMesh.position.set(-112, 0, 60);
+
+  // Weapon view models (v9 iteration 3): procedural, no assets. The knife
+  // rides in the right hand (it swings with the arm); the bazooka tube
+  // rides on the right shoulder, pointing forward. Only the selected
+  // weapon is visible, and both hide with the mesh when the player is
+  // in a car.
+  const knifeMesh = new THREE.Group();
+  {
+    const handle = new THREE.Mesh(
+      new THREE.BoxGeometry(0.07, 0.18, 0.07),
+      new THREE.MeshStandardMaterial({ color: 0x2a1c10, roughness: 0.9 }),
+    );
+    handle.position.y = -0.08;
+    knifeMesh.add(handle);
+    const blade = new THREE.Mesh(
+      new THREE.BoxGeometry(0.05, 0.5, 0.015),
+      new THREE.MeshStandardMaterial({ color: 0xc8ccd4, roughness: 0.25, metalness: 0.9 }),
+    );
+    blade.position.y = 0.26;
+    knifeMesh.add(blade);
+    knifeMesh.position.set(0, -0.58, 0.06);
+    knifeMesh.rotation.x = 0.5;
+    knifeMesh.visible = false;
+    playerMesh.userData.armR.add(knifeMesh);
+  }
+  const bazookaMesh = new THREE.Group();
+  {
+    const tube = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.11, 0.11, 1.15, 10),
+      new THREE.MeshStandardMaterial({ color: 0x3a4a2e, roughness: 0.6, metalness: 0.4 }),
+    );
+    tube.rotation.x = Math.PI / 2;
+    bazookaMesh.add(tube);
+    const bell = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.16, 0.11, 0.22, 10),
+      new THREE.MeshStandardMaterial({ color: 0x2c3a22, roughness: 0.6, metalness: 0.4 }),
+    );
+    bell.rotation.x = Math.PI / 2;
+    bell.position.z = 0.62;
+    bazookaMesh.add(bell);
+    const sight = new THREE.Mesh(
+      new THREE.BoxGeometry(0.05, 0.09, 0.18),
+      new THREE.MeshStandardMaterial({ color: 0x14161a, roughness: 0.5, metalness: 0.6 }),
+    );
+    sight.position.set(0, 0.14, 0.1);
+    bazookaMesh.add(sight);
+    bazookaMesh.position.set(0.34, 1.42, 0.3);
+    bazookaMesh.visible = false;
+    playerMesh.userData.rig.add(bazookaMesh);
+  }
+  function updateWeaponModels() {
+    knifeMesh.visible = player.weapon === 1 && !player.inCar;
+    bazookaMesh.visible = player.weapon === 2 && !player.inCar;
+  }
 
   // Mission beacon: a tall glowing pillar over the current target.
   const beacon = new THREE.Mesh(
@@ -367,6 +459,44 @@ export function createGame(canvas, seed) {
   );
   muzzle.visible = false;
   scene.add(muzzle);
+
+  // Bazooka rockets (v9 iteration 3): pooled, three in flight at most.
+  // A rocket flies dead straight along the firing direction at a fixed
+  // speed and explodes on impact (enemy, barrel, ped, or max range).
+  const rockets = [];
+  for (let i = 0; i < 3; i += 1) {
+    const g = new THREE.Group();
+    const body = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.09, 0.09, 0.8, 8),
+      new THREE.MeshStandardMaterial({ color: 0x5a5f66, roughness: 0.4, metalness: 0.7 }),
+    );
+    body.rotation.x = Math.PI / 2;
+    g.add(body);
+    const nose = new THREE.Mesh(
+      new THREE.ConeGeometry(0.09, 0.25, 8),
+      new THREE.MeshStandardMaterial({ color: 0xc22a22, roughness: 0.5, metalness: 0.4 }),
+    );
+    nose.rotation.x = Math.PI / 2;
+    nose.position.z = 0.52;
+    g.add(nose);
+    const fin = new THREE.Mesh(
+      new THREE.BoxGeometry(0.3, 0.02, 0.2),
+      new THREE.MeshStandardMaterial({ color: 0x2c3a22, roughness: 0.6 }),
+    );
+    fin.position.z = -0.35;
+    g.add(fin);
+    g.visible = false;
+    scene.add(g);
+    rockets.push({ mesh: g, active: false, dx: 0, dz: 0, life: 0 });
+  }
+  // Explosion flash: one expanding orange sphere, reused for every blast.
+  const blastFlash = new THREE.Mesh(
+    new THREE.SphereGeometry(0.5, 12, 10),
+    new THREE.MeshBasicMaterial({ color: 0xffa62e, transparent: true, opacity: 0 }),
+  );
+  blastFlash.visible = false;
+  scene.add(blastFlash);
+  let blastT = 0;
   // Impact burst: a hot glow held on the enemy the staged shot hits, so
   // the combat frame shows where the bolt lands instead of a bare line end.
   const impactGlow = new THREE.Mesh(
@@ -434,6 +564,7 @@ export function createGame(canvas, seed) {
   // Wanted stars on the previous step, for the evaded toast: the toast
   // fires only when the stars actually fall to zero from a pursuit.
   let prevStars = 0;
+  let prevGrace = 0;
   // Cars the V key spawned (capped, oldest removed first).
   const spawnedCars = [];
 
@@ -649,9 +780,10 @@ export function createGame(canvas, seed) {
   function resprayCar(car) {
     const choices = SPECS.filter((s) => s.color !== car.color);
     const spec = choices[Math.floor(rng.next() * choices.length)];
-    scene.remove(car.group);
+    const oldGroup = car.group;
+    scene.remove(oldGroup);
     const mesh = makeCarMesh(spec.color, false);
-    mesh.group.position.copy(car.group.position);
+    mesh.group.position.copy(oldGroup.position);
     mesh.group.rotation.y = car.heading;
     scene.add(mesh.group);
     car.group = mesh.group;
@@ -663,6 +795,12 @@ export function createGame(canvas, seed) {
     car.name = spec.name;
     car.wheelSpin = 0;
     car.condition = 100;
+    // Memory-leak guard (item 12): the old paint's per-instance resources
+    // (head/tail light materials, and for a van/cabrio the checker band /
+    // windshield) are freed now that the old mesh is gone. Shared
+    // geometries/materials are never in the owned list, so the other cars
+    // are untouched.
+    disposeCarMesh(oldGroup);
   }
 
   // A battered car is slower: condition 100 runs full speed, condition 0
@@ -774,6 +912,9 @@ export function createGame(canvas, seed) {
       const pidx = parked.indexOf(old);
       if (pidx >= 0) parked.splice(pidx, 1);
       scene.remove(old.group);
+      // Memory-leak guard (item 12): free the evicted car's per-instance
+      // resources (head/tail light materials) before dropping it.
+      disposeCarMesh(old.group);
     }
     const specIdx = SPECS.findIndex((s) => s.name === 'Furia Sport');
     const spec = SPECS[specIdx >= 0 ? specIdx : 0];
@@ -816,7 +957,173 @@ export function createGame(canvas, seed) {
     if (Math.hypot(pp.x - b.x, pp.z - b.z) < 5) damagePlayer(25, 'blast');
   }
 
+  // Knife (v9 iteration 3): a melee arc in front of the player — anything
+  // within range and inside the swing width takes the hit. Flat damage,
+  // deterministic, no randomness.
+  function knifeSwing() {
+    if (player.shootCooldown > 0) return;
+    player.shootCooldown = cfg.weapons.knife.cooldown;
+    player.swingT = 0.25;
+    const origin = playerMesh.position;
+    const dir = { x: Math.sin(state.camYaw), z: Math.cos(state.camYaw) };
+    let best = null;
+    let bestDist = cfg.weapons.knife.range;
+    for (const e of enemies) {
+      if (!e.alive) continue;
+      const dx = e.group.position.x - origin.x;
+      const dz = e.group.position.z - origin.z;
+      const along = dx * dir.x + dz * dir.z;
+      if (along < 0 || along > bestDist) continue;
+      if (Math.abs(dx * dir.z - dz * dir.x) < 1.1) { best = { kind: 'enemy', obj: e }; bestDist = along; }
+    }
+    if (!best) {
+      for (const b of city.barrels) {
+        if (!b.alive) continue;
+        const dx = b.x - origin.x;
+        const dz = b.z - origin.z;
+        const along = dx * dir.x + dz * dir.z;
+        if (along < 0 || along > bestDist) continue;
+        if (Math.abs(dx * dir.z - dz * dir.x) < 1.1) { best = { kind: 'barrel', obj: b }; bestDist = along; }
+      }
+    }
+    if (!best) {
+      for (const p of pedestrians) {
+        const dx = p.group.position.x - origin.x;
+        const dz = p.group.position.z - origin.z;
+        const along = dx * dir.x + dz * dir.z;
+        if (along < 0 || along > bestDist) continue;
+        if (Math.abs(dx * dir.z - dz * dir.x) < 1.1) { best = { kind: 'ped', obj: p }; bestDist = along; }
+      }
+    }
+    if (best) {
+      const hx = origin.x + dir.x * bestDist;
+      const hz = origin.z + dir.z * bestDist;
+      burst(hx, 1.2, hz, 6);
+      if (best.kind === 'enemy') hurtEnemy(best.obj, cfg.weapons.knife.damage);
+      else if (best.kind === 'barrel') explodeBarrel(best.obj);
+      else {
+        const idx = pedestrians.indexOf(best.obj);
+        if (idx >= 0) {
+          scene.remove(best.obj.group);
+          pedestrians.splice(idx, 1);
+        }
+        addHeat(wanted, cfg.police.hitPedHeat);
+      }
+    }
+    audio.click();
+    for (const p of pedestrians) updatePedestrian(p, 0, cfg, { x: origin.x, z: origin.z });
+    ensurePolice(wanted, scene, playerPos(), rng, { heading: state.camYaw, roadLines: city.roadLines });
+  }
+
+  // Bazooka (v9 iteration 3): one rocket per trigger pull, straight line,
+  // limited ammo. The rocket is stepped in updateRockets(); this only
+  // launches it.
+  function fireRocket() {
+    if (player.shootCooldown > 0) return;
+    if (player.rockets <= 0) {
+      hud.showMessage('Out of rockets — finish a job to restock.', 3);
+      audio.click();
+      return;
+    }
+    const slot = rockets.find((r) => !r.active);
+    if (!slot) return;
+    player.shootCooldown = cfg.weapons.bazooka.cooldown;
+    player.rockets -= 1;
+    const origin = player.inCar && player.car
+      ? player.car.group.position.clone().setY(1.4)
+      : playerMesh.position.clone().setY(1.5);
+    slot.active = true;
+    slot.life = 0;
+    slot.dx = Math.sin(state.camYaw);
+    slot.dz = Math.cos(state.camYaw);
+    slot.mesh.position.set(origin.x, 1.5, origin.z);
+    slot.mesh.rotation.y = Math.atan2(slot.dx, slot.dz);
+    slot.mesh.visible = true;
+    muzzle.position.set(origin.x + slot.dx * 1.2, 1.5, origin.z + slot.dz * 1.2);
+    muzzle.scale.setScalar(1.6);
+    muzzle.visible = true;
+    if (!state.shotMode) setTimeout(() => { muzzle.visible = false; }, 90);
+    audio.crash();
+    addHeat(wanted, cfg.police.shootHeat);
+  }
+
+  // Rocket flight + blast. Deterministic damage: every enemy in the blast
+  // radius takes the same flat hit; barrels in the radius go up too.
+  function updateRockets(dt) {
+    for (const r of rockets) {
+      if (!r.active) continue;
+      r.life += dt;
+      const step = cfg.weapons.bazooka.rocketSpeed * dt;
+      r.mesh.position.x += r.dx * step;
+      r.mesh.position.z += r.dz * step;
+      burst(r.mesh.position.x, r.mesh.position.y, r.mesh.position.z, 1);
+      let hit = r.life * cfg.weapons.bazooka.rocketSpeed >= cfg.weapons.bazooka.range;
+      if (!hit) {
+        for (const e of enemies) {
+          if (!e.alive) continue;
+          if (Math.hypot(e.group.position.x - r.mesh.position.x, e.group.position.z - r.mesh.position.z) < 1.6) { hit = true; break; }
+        }
+      }
+      if (!hit) {
+        for (const b of city.barrels) {
+          if (!b.alive) continue;
+          if (Math.hypot(b.x - r.mesh.position.x, b.z - r.mesh.position.z) < 1.6) { hit = true; break; }
+        }
+      }
+      if (!hit) {
+        for (const p of pedestrians) {
+          if (Math.hypot(p.group.position.x - r.mesh.position.x, p.group.position.z - r.mesh.position.z) < 1.6) { hit = true; break; }
+        }
+      }
+      if (hit) {
+        r.active = false;
+        r.mesh.visible = false;
+        const ex = r.mesh.position.x;
+        const ez = r.mesh.position.z;
+        burst(ex, 1.2, ez, 24);
+        blastFlash.position.set(ex, 1.4, ez);
+        blastFlash.scale.setScalar(1);
+        blastFlash.material.opacity = 0.9;
+        blastFlash.visible = true;
+        blastT = 0.35;
+        state.shake = Math.max(state.shake || 0, 0.6);
+        audio.crash();
+        const R = cfg.weapons.bazooka.blastRadius;
+        for (const e of enemies) {
+          if (!e.alive) continue;
+          if (Math.hypot(e.group.position.x - ex, e.group.position.z - ez) < R) hurtEnemy(e, cfg.weapons.bazooka.blastDamage);
+        }
+        for (const b of city.barrels) {
+          if (!b.alive) continue;
+          if (Math.hypot(b.x - ex, b.z - ez) < R) explodeBarrel(b);
+        }
+        let pedHit = false;
+        for (let i = pedestrians.length - 1; i >= 0; i -= 1) {
+          const p = pedestrians[i];
+          if (Math.hypot(p.group.position.x - ex, p.group.position.z - ez) < R) {
+            scene.remove(p.group);
+            pedestrians.splice(i, 1);
+            pedHit = true;
+          }
+        }
+        if (pedHit) addHeat(wanted, cfg.police.hitPedHeat);
+      }
+    }
+    if (blastT > 0) {
+      blastT -= dt;
+      const k = Math.max(0, blastT / 0.35);
+      blastFlash.scale.setScalar(1 + (1 - k) * 10);
+      blastFlash.material.opacity = 0.9 * k;
+      if (blastT <= 0) blastFlash.visible = false;
+    }
+  }
+
   function shoot() {
+    // Weapon dispatch (v9 iteration 3): the knife swings in front, the
+    // bazooka launches a rocket. In a car the knife falls back to the
+    // pistol (no room to swing); the bazooka fires from the car.
+    if (!player.inCar && player.weapon === 1) { knifeSwing(); return; }
+    if (player.weapon === 2) { fireRocket(); return; }
     if (player.shootCooldown > 0) return;
     player.shootCooldown = cfg.player.shootCooldown;
     const origin = player.inCar && player.car
@@ -975,6 +1282,9 @@ export function createGame(canvas, seed) {
 
   function respawn() {
     player.health = cfg.player.maxHealth;
+    // Bazooka restock on respawn (v9 iteration 3): waking up at the
+    // hospital refills the rockets to the full 8.
+    player.rockets = cfg.weapons.bazooka.rockets;
     player.dead = false;
     player.cash = Math.max(0, player.cash - cfg.player.respawnCost);
     clearPolice(wanted, scene);
@@ -1079,6 +1389,11 @@ export function createGame(canvas, seed) {
     missions.stage = 0;
     missions.timer = 0;
     player.dead = false;
+    // A held Space from the title screen must not fire a jump on spawn.
+    player.prevBrake = input.brake();
+    player.vy = 0;
+    player.grounded = true;
+    playerMesh.position.y = 0;
     state.screen = SCREEN_PLAY;
     audio.unlock();
     startMission(missions, missions.index, cfg);
@@ -1227,6 +1542,10 @@ export function createGame(canvas, seed) {
       spotlight: wanted.heliOverhead,
       packages: packages.count(),
       packagesTotal: cfg.packages.count,
+      weapon: player.weapon,
+      rockets: player.rockets,
+      // Two seasons (v9 iteration 3): odd days rain, even days dry.
+      season: state.day % 2 === 1 ? 'MUSIM HUJAN' : 'MUSIM KEMARAU',
     };
   }
 
@@ -1278,6 +1597,7 @@ export function createGame(canvas, seed) {
       state.clockHour -= 24;
       state.day += 1;
     }
+    applySeason();
     player.shootCooldown = Math.max(0, player.shootCooldown - dt);
     state.resprayCooldown = Math.max(0, state.resprayCooldown - dt);
     state.spawnCarCooldown = Math.max(0, state.spawnCarCooldown - dt);
@@ -1309,6 +1629,10 @@ export function createGame(canvas, seed) {
     }
     if (actions & ACTION_SHOOT) shoot();
     if (actions & ACTION_SPAWN_CAR) spawnPlayerCar();
+    // Weapon switch (v9 iteration 3): 1 pistol, 2 knife, 3 bazooka.
+    if (actions & ACTION_WEAPON_1) { player.weapon = 0; audio.click(); updateWeaponModels(); }
+    if (actions & ACTION_WEAPON_2) { player.weapon = 1; audio.click(); updateWeaponModels(); }
+    if (actions & ACTION_WEAPON_3) { player.weapon = 2; audio.click(); updateWeaponModels(); }
 
     const p = playerPos();
     if (player.inCar && player.car) {
@@ -1406,9 +1730,14 @@ export function createGame(canvas, seed) {
       let mz = 0;
       if (input.forward()) { mx += Math.sin(state.camYaw); mz += Math.cos(state.camYaw); }
       if (input.back()) { mx -= Math.sin(state.camYaw); mz -= Math.cos(state.camYaw); }
-      if (input.left()) { mx -= Math.cos(state.camYaw); mz += Math.sin(state.camYaw); }
-      if (input.right()) { mx += Math.cos(state.camYaw); mz -= Math.sin(state.camYaw); }
+      // v9 iteration 3: A/D were inverted. Camera-relative left is
+      // (+cos yaw, -sin yaw): at yaw 0 the camera looks along +z and
+      // screen-left is +x. The old code had the signs swapped, so A moved
+      // the player to screen-right and D to screen-left.
+      if (input.left()) { mx += Math.cos(state.camYaw); mz -= Math.sin(state.camYaw); }
+      if (input.right()) { mx -= Math.cos(state.camYaw); mz += Math.sin(state.camYaw); }
       const len = Math.hypot(mx, mz);
+      const joints = playerMesh.userData;
       if (len > 0) {
         mx /= len;
         mz /= len;
@@ -1417,7 +1746,56 @@ export function createGame(canvas, seed) {
         player.heading = Math.atan2(mx, mz);
         playerMesh.rotation.y = player.heading;
         player.bob += dt * (run ? 14 : 9);
-        playerMesh.position.y = Math.abs(Math.sin(player.bob)) * 0.07;
+        // Walk cycle (v9 iteration 3): legs and arms swing as a pendulum
+        // around the hip/shoulder pivots, in step with movement speed.
+        // The mesh y NEVER lifts while grounded — feet stay planted; the
+        // swinging foot rises naturally at the ends of its arc. The old
+        // whole-body bounce (up to 0.07) with frozen legs read as floating.
+        const swing = Math.sin(player.bob) * (run ? 0.85 : 0.55);
+        if (joints.legL) {
+          joints.legL.rotation.x = -swing;
+          joints.legR.rotation.x = swing;
+          joints.armL.rotation.x = swing;
+          joints.armR.rotation.x = -swing;
+          joints.rig.rotation.x = 0.03;
+        }
+      } else if (player.grounded) {
+        // Idle: ease the limbs back to neutral instead of snapping.
+        if (joints.legL) {
+          const k = Math.min(1, dt * 10);
+          joints.legL.rotation.x += (0 - joints.legL.rotation.x) * k;
+          joints.legR.rotation.x += (0 - joints.legR.rotation.x) * k;
+          joints.armL.rotation.x += (0 - joints.armL.rotation.x) * k;
+          joints.armR.rotation.x += (0 - joints.armR.rotation.x) * k;
+          joints.rig.rotation.x += (0 - joints.rig.rotation.x) * k;
+        }
+      }
+      // Jump (v9 iteration 3): Space on foot only — Space stays the brake
+      // in a car. Edge-triggered (a fresh press), so holding Space does
+      // not bunny-hop; no double-jump (grounded only). One velocity, one
+      // gravity; landing is exactly y = 0.
+      const brake = input.brake();
+      if (brake && !player.prevBrake && player.grounded) {
+        player.vy = cfg.player.jumpSpeed;
+        player.grounded = false;
+      }
+      player.prevBrake = brake;
+      if (!player.grounded) {
+        player.vy -= cfg.player.jumpGravity * dt;
+        playerMesh.position.y += player.vy * dt;
+        if (playerMesh.position.y <= 0) {
+          playerMesh.position.y = 0;
+          player.vy = 0;
+          player.grounded = true;
+        }
+        // Airborne leg tuck: one leg forward, one back, arms slightly out.
+        if (joints.legL) {
+          joints.legL.rotation.x = 0.55;
+          joints.legR.rotation.x = -0.35;
+          joints.armL.rotation.x = -0.3;
+          joints.armR.rotation.x = -0.3;
+          joints.rig.rotation.x = 0.06;
+        }
       } else {
         playerMesh.position.y = 0;
       }
@@ -1470,7 +1848,13 @@ export function createGame(canvas, seed) {
       } else {
         damagePlayer(cfg.police.ramDamage, 'ram');
       }
-    }, () => damagePlayer(999, 'arrest'), rng);
+    }, () => damagePlayer(999, 'arrest'), rng, { cars: allCars(), pedestrians });
+    // v9 iteration 3: say it once when the grace window opens — the
+    // player just fired their first shot and the police are on their way.
+    if (wanted.graceTimer > 0 && prevGrace <= 0) {
+      hud.showMessage('Police alerted — one slip and they come for you. Lay low!', 4);
+    }
+    prevGrace = wanted.graceTimer;
     // Escaped: the stars fell to zero from a real pursuit. Say so, and
     // give the player a short cooldown before the heat can rise again.
     if (prevStars > 0 && wanted.stars === 0) {
@@ -1496,6 +1880,9 @@ export function createGame(canvas, seed) {
       const reward = completeMission(missions);
       player.cash += reward;
       player.armour = Math.min(cfg.player.maxArmour, player.armour + cfg.player.armourOnJob);
+      // Bazooka restock on job completion (v9 iteration 3): Marla's crew
+      // refills the rockets to the full 8 after every finished job.
+      player.rockets = cfg.weapons.bazooka.rockets;
       audio.missionDone();
       saveGame();
       showJobComplete(finishedDef, reward, finishedElapsed, finishedStars);
@@ -1519,6 +1906,18 @@ export function createGame(canvas, seed) {
     }
 
     // Tracers and particles fade.
+    updateRockets(dt);
+    // Knife swing animation (v9 iteration 3): the blade sweeps once over
+    // 0.25 s and the right arm follows it; the walk cycle owns the arm
+    // again the moment the swing ends.
+    if (player.swingT > 0) {
+      player.swingT -= dt;
+      const prog = 1 - Math.max(0, player.swingT) / 0.25;
+      const sweep = -1.2 * Math.sin(prog * Math.PI);
+      knifeMesh.rotation.x = 0.5 + sweep;
+      if (playerMesh.userData.armR) playerMesh.userData.armR.rotation.x = -0.8 * Math.sin(prog * Math.PI);
+      if (player.swingT <= 0) knifeMesh.rotation.x = 0.5;
+    }
     for (const t of tracers) {
       if (t.life > 0) {
         t.life -= dt;
@@ -1769,6 +2168,7 @@ export function createGame(canvas, seed) {
       hud.showMessage('Marla Quinn: Get to my garage, Coral Row — we talk work.', 30);
     }
     // Settle the world a few frames, then snap the camera and render.
+    applySeason();
     for (let i = 0; i < 30; i += 1) {
       updateLights(STEP);
       updateRain(STEP);
@@ -1842,6 +2242,85 @@ export function createGame(canvas, seed) {
     saveGame,
     loadSave,
     stageShot,
+    // Test hooks (v9 iteration 3): the headless probe drives the game
+    // through these — camera-relative movement, jump, walk cycle, and the
+    // weapon checks all read real state, never source code. No gameplay
+    // code reads them.
+    debug: {
+      playerPos: () => ({ x: playerMesh.position.x, y: playerMesh.position.y, z: playerMesh.position.z }),
+      camYaw: () => state.camYaw,
+      setCamYaw: (v) => { state.camYaw = v; },
+      playerState: () => ({
+        vy: player.vy, grounded: player.grounded, weapon: player.weapon,
+        rockets: player.rockets, inCar: player.inCar, heading: player.heading,
+        carHeading: player.car ? player.car.heading : null,
+        carSpeed: player.car ? player.car.speed : null,
+        cooldown: player.shootCooldown,
+      }),
+      playerJoints: () => {
+        const u = playerMesh.userData;
+        return {
+          legL: u.legL ? u.legL.rotation.x : 0,
+          legR: u.legR ? u.legR.rotation.x : 0,
+          armL: u.armL ? u.armL.rotation.x : 0,
+          armR: u.armR ? u.armR.rotation.x : 0,
+        };
+      },
+      teleport: (x, z) => {
+        playerMesh.position.set(x, 0, z);
+        player.vy = 0;
+        player.grounded = true;
+        state.camFocus = null;
+      },
+      spawnEnemyAt: (x, z) => {
+        const e = spawnEnemy(scene, x, z, null);
+        enemies.push(e);
+        return enemies.length;
+      },
+      enemies: () => enemies.map((e) => ({ x: e.group.position.x, z: e.group.position.z, health: e.health, alive: e.alive })),
+      rockets: () => rockets.filter((r) => r.active).map((r) => ({ x: r.mesh.position.x, y: r.mesh.position.y, z: r.mesh.position.z })),
+      nearestParkedCar: () => {
+        const pp = playerPos();
+        let best = null;
+        let bestD = Infinity;
+        // Parked cars only — traffic cars move, a walk-to target must not.
+        for (const car of parked) {
+          if (car === player.car) continue;
+          const d = Math.hypot(car.group.position.x - pp.x, car.group.position.z - pp.z);
+          if (d < bestD) { bestD = d; best = car; }
+        }
+        return best ? { x: best.group.position.x, z: best.group.position.z, dist: bestD } : null;
+      },
+      trafficCount: () => traffic.length,
+      // Item 12 (memory-leak guard): build one mesh of each car kind,
+      // report how many per-instance resources the factory owns for it,
+      // dispose them, and confirm the list is empty afterwards. A count
+      // of 0 for a kind would mean its fresh resources were never tagged.
+      // Expected: Furia 2 (head/tail mats), Interceptor 10 (+2 door
+      // geos/mats, +2 light-bar geos/mats), Lobo Van 6 (+band mat, 2 band
+      // geos, roof-sign mat), Solano Cabrio 4 (+shield geo/mat).
+      disposeCheck: () => {
+        const out = {};
+        for (const [name, color, isPolice] of [['Furia Sport', 0x8a5fc2, false], ['Interceptor', 0x1a1a22, true], ['Lobo Van', 0xd8d8d8, false], ['Solano Cabrio', 0xe8c832, false]]) {
+          const m = makeCarMesh(color, isPolice);
+          const before = (m.group.userData.owned || []).length;
+          disposeCarMesh(m.group);
+          out[name] = { ownedBefore: before, ownedAfter: (m.group.userData.owned || []).length };
+        }
+        return out;
+      },
+      clearEnemies: () => {
+        // No dispose call here on purpose (item 12 audit): enemy meshes
+        // are people, and every geometry/material in makePersonMesh comes
+        // from its shared caches — scene.remove is the complete cleanup.
+        for (const e of enemies) scene.remove(e.group);
+        enemies.length = 0;
+        return 0;
+      },
+      buildingCount: () => city.buildingCount,
+      season: () => (state.day % 2 === 1 ? 'MUSIM HUJAN' : 'MUSIM KEMARAU'),
+      rainVisible: () => rain.visible,
+    },
     run() {
       document.getElementById('btn-start').addEventListener('click', () => {
         document.getElementById('screen-title').style.display = 'none';

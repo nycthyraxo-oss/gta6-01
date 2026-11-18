@@ -3,9 +3,8 @@
 // (fixed steps), never by the wall clock, so a staged screenshot always
 // sees the same lights.
 //
-// The lights are dressing: they cycle on the poles and the game paints
-// their lamps. The traffic AI is v5, unchanged — the drivers do not read
-// the lights, per the standing direction that the NPC AI stays as it is.
+// v9 iteration 3: the traffic AI reads the lights (see vehicles.js) —
+// red means stop at the stop line, yellow means stop if there is room.
 //
 // Phase (seconds into the cycle): NS green, then NS yellow, then EW green,
 // then EW yellow, then it repeats.

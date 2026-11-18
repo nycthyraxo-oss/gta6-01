@@ -322,11 +322,11 @@ function groundNoiseTexture(base, dark, light, repeat) {
   return tex;
 }
 const wetGroundMat = new THREE.MeshStandardMaterial({
-  map: groundNoiseTexture('#4a5440', 'rgba(28,34,24,0.18)', 'rgba(140,150,110,0.14)', 12),
+  map: groundNoiseTexture('#4a5440', 'rgba(28,34,24,0.12)', 'rgba(140,150,110,0.10)', 12),
   roughness: 0.45, metalness: 0.05,
 });
 const wetWalkMat = new THREE.MeshStandardMaterial({
-  map: groundNoiseTexture('#847c6e', 'rgba(40,34,26,0.18)', 'rgba(190,180,150,0.14)', 2),
+  map: groundNoiseTexture('#847c6e', 'rgba(40,34,26,0.12)', 'rgba(190,180,150,0.10)', 2),
   roughness: 0.55, metalness: 0.05,
 });
 const wetApronMat = new THREE.MeshStandardMaterial({ color: 0x6a6a66, roughness: 0.5, metalness: 0.05 });
@@ -370,6 +370,28 @@ export function buildCity(scene, rng, cfg) {
   group.name = 'CostaFuego';
   scene.add(group);
 
+  // Instanced thin boxes (road paint, curbs): one draw call per list.
+  // Each entry is { x, z, w, l } — w along x, l along z, centred at y,
+  // h tall. Deterministic: no rng, no hash, just the grid.
+  function instancedBoxes(list, color, y, h) {
+    const geo = new THREE.BoxGeometry(1, 1, 1);
+    const mat = new THREE.MeshStandardMaterial({ color, roughness: 0.9, metalness: 0.05 });
+    const mesh = new THREE.InstancedMesh(geo, mat, list.length);
+    const m4 = new THREE.Matrix4();
+    const q = new THREE.Quaternion();
+    const v = new THREE.Vector3();
+    const sc = new THREE.Vector3();
+    list.forEach((m, i) => {
+      v.set(m.x, y, m.z);
+      sc.set(m.w, h, m.l);
+      m4.compose(v, q, sc);
+      mesh.setMatrixAt(i, m4);
+    });
+    mesh.instanceMatrix.needsUpdate = true;
+    mesh.receiveShadow = true;
+    return mesh;
+  }
+
   // Base ground, then the sand strip and the sea to the east.
   // v9: the open ground is wet (sheen, not dry dirt).
   group.add(wetFlat(W.groundSize, W.groundSize, wetGroundMat, 0, 0, -0.05));
@@ -383,14 +405,64 @@ export function buildCity(scene, rng, cfg) {
   sea.receiveShadow = true;
   group.add(sea);
 
-  // Roads: dark wet strips along every grid line, with pale centre dashes.
+  // Roads: dark wet strips along every grid line.
   for (const c of roadLines) {
     group.add(wetFlat(W.roadWidth, half * 2, wetRoadMat, c, 0, 0.02));
     group.add(wetFlat(half * 2, W.roadWidth, wetRoadMat, 0, c, 0.02));
-    for (let t = -half + 8; t < half - 4; t += 12) {
-      group.add(box(0.5, 0.06, 4, cfg.palette.roadLine, c, 0.05, t));
-      group.add(box(4, 0.06, 0.5, cfg.palette.roadLine, t, 0.05, c));
+  }
+
+  // Road markings (v9 iteration 3): proper big-city paint, two
+  // InstancedMeshes instead of hundreds of individual dash meshes —
+  // double-yellow centre lines, dashed white lane dividers at ±3.5,
+  // solid white edge lines at ±6.5, and crosswalks at ALL 36
+  // intersections. The paint breaks at every intersection (the crosswalk
+  // zone), exactly like a real street. No rng: pure grid arithmetic.
+  {
+    const yellow = [];
+    const white = [];
+    const segs = [];
+    for (let i = 0; i < roadLines.length - 1; i += 1) {
+      segs.push([roadLines[i] + 9.5, roadLines[i + 1] - 9.5]);
     }
+    for (const c of roadLines) {
+      for (const [a, b] of segs) {
+        const len = b - a;
+        const mid = (a + b) / 2;
+        // Vertical road (runs along z at x = c).
+        yellow.push({ x: c - 0.4, z: mid, w: 0.25, l: len });
+        yellow.push({ x: c + 0.4, z: mid, w: 0.25, l: len });
+        white.push({ x: c - 6.5, z: mid, w: 0.25, l: len });
+        white.push({ x: c + 6.5, z: mid, w: 0.25, l: len });
+        // Horizontal road (runs along x at z = c).
+        yellow.push({ x: mid, z: c - 0.4, w: len, l: 0.25 });
+        yellow.push({ x: mid, z: c + 0.4, w: len, l: 0.25 });
+        white.push({ x: mid, z: c - 6.5, w: len, l: 0.25 });
+        white.push({ x: mid, z: c + 6.5, w: len, l: 0.25 });
+      }
+      // Dashed lane dividers, kept clear of the crosswalk zone (±12).
+      for (let t = -half + 12; t < half - 8; t += 10) {
+        let near = false;
+        for (const l of roadLines) if (Math.abs(t - l) < 12) { near = true; break; }
+        if (near) continue;
+        white.push({ x: c - 3.5, z: t, w: 0.3, l: 3 });
+        white.push({ x: c + 3.5, z: t, w: 0.3, l: 3 });
+        white.push({ x: t, z: c - 3.5, w: 3, l: 0.3 });
+        white.push({ x: t, z: c + 3.5, w: 3, l: 0.3 });
+      }
+    }
+    // Crosswalks at every intersection (the old per-junction boxes are gone).
+    for (const rx of roadLines) {
+      for (const rz of roadLines) {
+        for (let s = -2; s <= 2; s += 1) {
+          white.push({ x: rx + s * 2.2, z: rz - 9.5, w: 0.9, l: 3.2 });
+          white.push({ x: rx + s * 2.2, z: rz + 9.5, w: 0.9, l: 3.2 });
+          white.push({ x: rx - 9.5, z: rz + s * 2.2, w: 3.2, l: 0.9 });
+          white.push({ x: rx + 9.5, z: rz + s * 2.2, w: 3.2, l: 0.9 });
+        }
+      }
+    }
+    group.add(instancedBoxes(yellow, 0xe8c832, 0.05, 0.05));
+    group.add(instancedBoxes(white, 0xf2f2f2, 0.05, 0.05));
   }
 
   // Sidewalk slabs around each block, with a raised curb edge on the road
@@ -399,6 +471,22 @@ export function buildCity(scene, rng, cfg) {
     for (const bz of blockCenters) {
       group.add(wetFlat(W.blockSize + 6, W.blockSize + 6, wetWalkMat, bx, bz, 0.03));
     }
+  }
+
+  // Real curbs (v9 iteration 3): thin raised concrete edges along each
+  // block's sidewalk, at the road's edge (21 from the block centre), one
+  // InstancedMesh. No collision — the player steps over them, as in v8.
+  {
+    const curbs = [];
+    for (const bx of blockCenters) {
+      for (const bz of blockCenters) {
+        curbs.push({ x: bx - 21, z: bz, w: 0.3, l: 42 });
+        curbs.push({ x: bx + 21, z: bz, w: 0.3, l: 42 });
+        curbs.push({ x: bx, z: bz - 21, w: 42, l: 0.3 });
+        curbs.push({ x: bx, z: bz + 21, w: 42, l: 0.3 });
+      }
+    }
+    group.add(instancedBoxes(curbs, 0x8a8578, 0.075, 0.15));
   }
 
   const landmarks = {
@@ -941,6 +1029,39 @@ export function buildCity(scene, rng, cfg) {
   raiseFixedBuilding(-73, 70, 8, 10, 9, 'stucco', 1);
   raiseFixedBuilding(-20, 185, 12, 10, 9, 'brick', 2);
 
+  // USER REFINEMENT (v9 iteration 3): the empty brown ring beyond the
+  // grid — the lots the user saw from the park, big and bare — gets its
+  // own skyline. Sixteen fixed buildings on the north, west and south
+  // outer ring (|coord| 166-168, past the outer road at 140, past the
+  // player clamp, so they are skyline, not gameplay). Same four tiers
+  // as iteration 2, same zero-rng rule, same organic placement: tall
+  // toward the centre axis, low toward the corners, irregular depths,
+  // no rows. East ring skipped on purpose — that is beach and sea.
+  // Clear of everything: the iteration-2 south ring (0,172 / 52,178 /
+  // -20,185), the docks piers (x 143-169, z 95-129), the beach sand
+  // (x 142+), the parks, the spawn, and all 10 package spots.
+  // Tier 3-4 — north ring: the skyline behind the park, tallest near
+  // the Fuego Tower axis, stepping down to the corners.
+  raiseFixedBuilding(-140, -168, 12, 12, 12, 'residential', 0);
+  raiseFixedBuilding(-84, -168, 14, 12, 16, 'residential', 1);
+  raiseFixedBuilding(-28, -168, 14, 14, 26, 'commercial', 2);
+  raiseFixedBuilding(28, -168, 14, 12, 22, 'glass', 0);
+  raiseFixedBuilding(84, -168, 12, 12, 18, 'commercial', 1);
+  raiseFixedBuilding(132, -168, 12, 12, 14, 'residential', 2);
+  // Tier 2-3 — west ring: the skyline past the garage and safehouse.
+  raiseFixedBuilding(-168, -84, 12, 12, 14, 'residential', 1);
+  raiseFixedBuilding(-168, -28, 14, 12, 20, 'commercial', 0);
+  raiseFixedBuilding(-168, 28, 12, 12, 16, 'residential', 2);
+  raiseFixedBuilding(-168, 84, 14, 12, 12, 'commercial', 1);
+  // Tier 2-3 — south ring: the skyline past the hospital and docks,
+  // filling the gaps between the iteration-2 south buildings.
+  raiseFixedBuilding(-140, 166, 12, 12, 13, 'residential', 0);
+  raiseFixedBuilding(-84, 166, 14, 12, 17, 'commercial', 2);
+  raiseFixedBuilding(-28, 166, 12, 12, 12, 'residential', 1);
+  raiseFixedBuilding(28, 166, 14, 12, 21, 'glass', 1);
+  raiseFixedBuilding(84, 166, 12, 12, 15, 'commercial', 0);
+  raiseFixedBuilding(132, 166, 12, 12, 11, 'brick', 2);
+
   // v9 rooftop clutter: AC boxes, vent pipes, satellite dishes and neon
   // roof strips, so the skyline stops reading as flat slabs. Instanced —
   // one draw call per type for the whole city. Placement is a pure hash
@@ -1087,6 +1208,17 @@ export function buildCity(scene, rng, cfg) {
       tree.position.set(tx, 0, tz);
       group.add(tree);
     }
+    // Benches (v9 iteration 3): aligned to the crossing paths, never
+    // random. Three fixed spots per park — east of the north-south path
+    // facing it, west of it facing it, north of the east-west path
+    // facing it — so no bench sits sideways or overlaps a path edge.
+    // The same rng draws are still consumed, as a ±0.4 jitter on the
+    // fixed spot, so the seeded city downstream stays byte-identical.
+    const benchSpots = [
+      { dx: 3.2, dz: -8, rot: -Math.PI / 2 },
+      { dx: -3.2, dz: 8, rot: Math.PI / 2 },
+      { dx: -8, dz: -3.2, rot: 0 },
+    ];
     const benchMat = cityMat(0x6a4a2a, 0.9);
     for (let i = 0; i < 3; i += 1) {
       const bench = new THREE.Group();
@@ -1102,8 +1234,11 @@ export function buildCity(scene, rng, cfg) {
         leg.position.set(lx, 0.25, 0);
         bench.add(leg);
       }
-      bench.position.set(cx + rng.range(-14, 14), 0, cz + rng.range(-14, 14));
-      bench.rotation.y = rng.range(0, Math.PI);
+      const jx = rng.range(-14, 14);
+      const jz = rng.range(-14, 14);
+      rng.range(0, Math.PI);
+      bench.position.set(cx + benchSpots[i].dx + jx * 0.03, 0, cz + benchSpots[i].dz + jz * 0.03);
+      bench.rotation.y = benchSpots[i].rot;
       group.add(bench);
     }
   }
@@ -1135,6 +1270,122 @@ export function buildCity(scene, rng, cfg) {
   tower2.add(roof2);
   tower2.position.set(158, 0, 60);
   group.add(tower2);
+  // Lifeguard dressing (v9 iteration 3): the tower above reads as a plain
+  // red box on a beige pillar. Red-white bands, a life-ring, a ladder,
+  // a watch chair on a sea-side platform, and a red flag on the roof make
+  // it read as a lifeguard spot from the beach. All fixed geometry.
+  {
+    const bandMat = cityMat(0xd84a4a, 0.8);
+    for (const by of [1.1, 2.3]) {
+      const band = new THREE.Mesh(new THREE.BoxGeometry(2.3, 0.28, 2.3), bandMat);
+      band.position.set(158, by, 60);
+      group.add(band);
+    }
+    const ring = new THREE.Mesh(
+      new THREE.TorusGeometry(0.5, 0.13, 8, 20),
+      new THREE.MeshStandardMaterial({ color: 0xf2f2f2, roughness: 0.7 }),
+    );
+    ring.rotation.y = Math.PI / 2;
+    ring.position.set(159.15, 2.0, 60);
+    group.add(ring);
+    // Ladder on the sea-facing side of the legs.
+    const railMat = cityMat(0x3a3f45, 0.6);
+    for (const lz of [59.6, 60.4]) {
+      const rail = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.05, 3.4, 6), railMat);
+      rail.position.set(159.15, 1.7, lz);
+      group.add(rail);
+    }
+    for (let ly = 0.5; ly <= 3.2; ly += 0.55) {
+      const rung = new THREE.Mesh(new THREE.CylinderGeometry(0.04, 0.04, 0.8, 6), railMat);
+      rung.rotation.x = Math.PI / 2;
+      rung.position.set(159.15, ly, 60);
+      group.add(rung);
+    }
+    // Watch chair: a small platform off the cabin's sea side, seat and
+    // backrest facing the water.
+    const plat = new THREE.Mesh(new THREE.BoxGeometry(1.8, 0.15, 2.0), cityMat(0x7a5c38, 0.9));
+    plat.position.set(160.1, 3.55, 60);
+    plat.castShadow = true;
+    group.add(plat);
+    const seat = new THREE.Mesh(new THREE.BoxGeometry(1.1, 0.12, 1.0), cityMat(0xf2f2f2, 0.8));
+    seat.position.set(160.3, 3.95, 60);
+    group.add(seat);
+    const seatBack = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.9, 1.0), cityMat(0xd84a4a, 0.8));
+    seatBack.position.set(159.8, 4.4, 60);
+    group.add(seatBack);
+    // Red flag on the roof apex.
+    const flagPole = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.05, 2.4, 6), railMat);
+    flagPole.position.set(158, 7.2, 60);
+    group.add(flagPole);
+    const flag = new THREE.Mesh(
+      new THREE.PlaneGeometry(0.95, 0.55),
+      new THREE.MeshStandardMaterial({ color: 0xd84a4a, side: THREE.DoubleSide, roughness: 0.8 }),
+    );
+    flag.position.set(158.5, 8.05, 60);
+    group.add(flag);
+  }
+  // Fuego Pier (v9 iteration 3): a wooden pier from the sand into the sea
+  // at z = 100 — clear of the umbrellas (z 80 / 120), the palms (z 84 /
+  // 112), the lifeguard tower (z 60) and the docks (z 95-129, x 143-169).
+  // Deck + posts + rails + a wider end platform with a lamp. Fixed
+  // geometry, no rng. The player clamp stops at x 165, so the pier is
+  // skyline/polish, not a walkable path — no gameplay change.
+  {
+    const pierWood = cityMat(0x7a5c38, 0.9);
+    const pierDark = cityMat(0x5a4630, 0.9);
+    const deck = new THREE.Mesh(new THREE.BoxGeometry(33, 0.3, 4), pierWood);
+    deck.position.set(184.5, 1.0, 100);
+    deck.castShadow = true;
+    deck.receiveShadow = true;
+    group.add(deck);
+    const deckTop = new THREE.Mesh(
+      new THREE.PlaneGeometry(33, 4),
+      new THREE.MeshStandardMaterial({ map: boardwalkTexture(), roughness: 0.9 }),
+    );
+    deckTop.rotation.x = -Math.PI / 2;
+    deckTop.position.set(184.5, 1.16, 100);
+    group.add(deckTop);
+    for (let px = 170; px <= 204; px += 6) {
+      for (const pz of [98.4, 101.6]) {
+        const post = new THREE.Mesh(new THREE.CylinderGeometry(0.16, 0.18, 2.2, 6), pierDark);
+        post.position.set(px, 0.1, pz);
+        post.castShadow = true;
+        group.add(post);
+      }
+    }
+    for (const rz of [98.2, 101.8]) {
+      const rail = new THREE.Mesh(new THREE.BoxGeometry(33, 0.12, 0.12), pierDark);
+      rail.position.set(184.5, 1.75, rz);
+      group.add(rail);
+    }
+    for (let px = 170; px <= 198; px += 6) {
+      for (const rz of [98.2, 101.8]) {
+        const railPost = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.06, 0.7, 6), pierDark);
+        railPost.position.set(px, 1.4, rz);
+        group.add(railPost);
+      }
+    }
+    const platform = new THREE.Mesh(new THREE.BoxGeometry(8, 0.3, 8), pierWood);
+    platform.position.set(205, 1.0, 100);
+    platform.castShadow = true;
+    group.add(platform);
+    const platTop = new THREE.Mesh(
+      new THREE.PlaneGeometry(8, 8),
+      new THREE.MeshStandardMaterial({ map: boardwalkTexture(), roughness: 0.9 }),
+    );
+    platTop.rotation.x = -Math.PI / 2;
+    platTop.position.set(205, 1.16, 100);
+    group.add(platTop);
+    const lampPole = new THREE.Mesh(new THREE.CylinderGeometry(0.08, 0.1, 3.2, 6), cityMat(0x2a2d33, 0.6));
+    lampPole.position.set(207.5, 2.75, 97.5);
+    group.add(lampPole);
+    const lampBulb = new THREE.Mesh(
+      new THREE.SphereGeometry(0.3, 8, 6),
+      new THREE.MeshBasicMaterial({ color: 0xffe9a8 }),
+    );
+    lampBulb.position.set(207.5, 4.45, 97.5);
+    group.add(lampBulb);
+  }
 
   // Mercado market stalls: six colorful stalls with striped awnings and
   // fruit crates along the mercado block's street edges. Vendors stand at
@@ -1336,18 +1587,54 @@ export function buildCity(scene, rng, cfg) {
   group.add(palm(72, 16));
 
   group.add(hydrant(-104, 52));
-  group.add(bench(-100, 50, 0.6));
+  // Spawn benches (v9 iteration 3): aligned to the nearest road instead
+  // of tilted at 0.6 / -0.4 rad — the east one faces the Coral Row road,
+  // the north one faces the road by the garage.
+  group.add(bench(-100, 50, Math.PI / 2));
   group.add(bin(-106, 68));
-  group.add(bench(-118, 72, -0.4));
+  group.add(bench(-118, 72, 0));
   for (let i = 0; i < 18; i += 1) {
     const hx = blockCenters[Math.floor(rng.next() * blockCenters.length)] + rng.range(-24, 24);
     const hz = blockCenters[Math.floor(rng.next() * blockCenters.length)] + rng.range(-24, 24);
     group.add(hydrant(hx, hz));
   }
+  // Roadside benches (v9 iteration 3): the same rng draws, but the bench
+  // is snapped to the nearest sidewalk edge — 8.5 from the road line, on
+  // the sidewalk, facing the road — instead of landing at a random angle
+  // in the middle of a block. Never within 3.5 of a hidden-package spot
+  // (coordinates mirror packages.js SPOTS); if it would be, it slides 4
+  // along the road.
+  const packSpots = [[-98, 96], [-98, -92], [160, 40], [128, 118], [146, -20], [20, 20], [62, -68], [-14, 118], [-40, -108], [70, 70]];
   for (let i = 0; i < 12; i += 1) {
     const bx2 = blockCenters[Math.floor(rng.next() * blockCenters.length)] + rng.range(-22, 22);
     const bz2 = blockCenters[Math.floor(rng.next() * blockCenters.length)] + rng.range(-22, 22);
-    group.add(bench(bx2, bz2, rng.range(0, Math.PI)));
+    rng.range(0, Math.PI);
+    let rx = roadLines[0];
+    for (const c of roadLines) if (Math.abs(bx2 - c) < Math.abs(bx2 - rx)) rx = c;
+    let rz = roadLines[0];
+    for (const c of roadLines) if (Math.abs(bz2 - c) < Math.abs(bz2 - rz)) rz = c;
+    let sx;
+    let sz;
+    let rot;
+    if (Math.abs(bx2 - rx) <= Math.abs(bz2 - rz)) {
+      sx = rx + (bx2 >= rx ? 8.5 : -8.5);
+      sz = bz2;
+      // Keep off the crossing road in the other axis.
+      if (Math.abs(sz - rz) < 9) sz = rz + (sz >= rz ? 9 : -9);
+      rot = bx2 >= rx ? -Math.PI / 2 : Math.PI / 2;
+    } else {
+      sz = rz + (bz2 >= rz ? 8.5 : -8.5);
+      sx = bx2;
+      if (Math.abs(sx - rx) < 9) sx = rx + (sx >= rx ? 9 : -9);
+      rot = bz2 >= rz ? Math.PI : 0;
+    }
+    for (const [px, pz] of packSpots) {
+      if (Math.hypot(sx - px, sz - pz) < 3.5) {
+        if (Math.abs(bx2 - rx) <= Math.abs(bz2 - rz)) sz += 4;
+        else sx += 4;
+      }
+    }
+    group.add(bench(sx, sz, rot));
   }
   for (let i = 0; i < 10; i += 1) {
     const bx3 = blockCenters[Math.floor(rng.next() * blockCenters.length)] + rng.range(-22, 22);
@@ -1412,12 +1699,38 @@ export function buildCity(scene, rng, cfg) {
         group.add(lampEw);
       }
     }
-    // Crosswalk stripes across both roads at the junction.
-    for (let s = -2; s <= 2; s += 1) {
-      group.add(box(0.9, 0.05, 3.2, 0xf2f2f2, j.x + s * 2.2, 0.05, j.z - 9.5));
-      group.add(box(0.9, 0.05, 3.2, 0xf2f2f2, j.x + s * 2.2, 0.05, j.z + 9.5));
-      group.add(box(3.2, 0.05, 0.9, 0xf2f2f2, j.x - 9.5, 0.05, j.z + s * 2.2));
-      group.add(box(3.2, 0.05, 0.9, 0xf2f2f2, j.x + 9.5, 0.05, j.z + s * 2.2));
+  }
+
+  // Street-name signs at eight non-light intersections (v9 iteration 3):
+  // a pole on the sidewalk corner and a green blade naming the cross
+  // street, readable from both sides. Clear of mission lines, package
+  // spots, the duel area and the beach. No rng.
+  const STREET_SIGNS = [
+    { x: -84, z: -28, name: 'SUNSET DR' },
+    { x: -28, z: 28, name: 'PLAZA WAY' },
+    { x: 28, z: 84, name: 'DOCKS RD' },
+    { x: 84, z: -28, name: 'SUNSET DR' },
+    { x: -84, z: 84, name: 'DOCKS RD' },
+    { x: 84, z: 56, name: 'BOARDWALK AVE' },
+    { x: -28, z: -56, name: 'CINE ST' },
+    { x: 56, z: -84, name: 'BAYVIEW LN' },
+  ];
+  for (const s of STREET_SIGNS) {
+    const px = s.x + 8.5;
+    const pz = s.z + 8.5;
+    const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.09, 0.12, 3.2, 6), poleMat);
+    pole.position.set(px, 1.63, pz);
+    pole.castShadow = true;
+    group.add(pole);
+    const tex = signTexture(s.name, '#1a5a2a', '#ffffff');
+    const bladeMat = new THREE.MeshStandardMaterial({ map: tex, roughness: 0.7 });
+    const theta = Math.atan2(s.x - px, s.z - pz);
+    for (const side of [0, Math.PI]) {
+      const blade = new THREE.Mesh(new THREE.PlaneGeometry(3.2, 0.8), bladeMat);
+      blade.position.set(px, 2.9, pz);
+      blade.rotation.y = theta + side;
+      blade.translateZ(0.02);
+      group.add(blade);
     }
   }
 
@@ -1449,6 +1762,10 @@ export function buildCity(scene, rng, cfg) {
   // carries a faint pink emissive — a puddle at dusk reflects the bright
   // pink sky, so it must read lighter than the dirt around it. Dark tints
   // with no environment map render as black holes, not water (v9 iter 1).
+  // v9 iteration 3 (seasons): the puddle and pool meshes are captured
+  // here so setSeason() can hide them in the dry season.
+  let puddleMesh = null;
+  let poolMesh = null;
   {
     const geo = new THREE.CircleGeometry(1, 20);
     const mat = new THREE.MeshStandardMaterial({
@@ -1510,6 +1827,7 @@ export function buildCity(scene, rng, cfg) {
     if (im.instanceColor) im.instanceColor.needsUpdate = true;
     im.receiveShadow = true;
     group.add(im);
+    puddleMesh = im;
   }
 
   // v9 lamp light pools: a warm additive glow on the pavement under every
@@ -1538,6 +1856,7 @@ export function buildCity(scene, rng, cfg) {
     });
     im.instanceMatrix.needsUpdate = true;
     group.add(im);
+    poolMesh = im;
   }
 
   // Warm light pools along the beachfront boulevard: a handful of real
@@ -1588,5 +1907,20 @@ export function buildCity(scene, rng, cfg) {
   scene.add(heli);
   heli.userData.rotor = rotor;
 
-  return { group, roadLines, blockCenters, landmarks, half, pitch, streetlights, heli, lightHeads, stallSpots, barrels };
+  // Two seasons (v9 iteration 3): MUSIM HUJAN (odd days) keeps the rain,
+  // puddles, lamp pools and wet-street shine; MUSIM KEMARAU (even days)
+  // hides all of them and dries the streets out (roughness up, shine
+  // gone), so the pink dusk stands clear. Pure function of the day —
+  // deterministic, no rng.
+  function setSeason(rainy) {
+    if (puddleMesh) puddleMesh.visible = rainy;
+    if (poolMesh) poolMesh.visible = rainy;
+    wetRoadMat.roughness = rainy ? 0.35 : 0.92;
+    wetRoadMat.metalness = rainy ? 0.25 : 0.02;
+    wetGroundMat.roughness = rainy ? 0.45 : 0.95;
+    wetWalkMat.roughness = rainy ? 0.55 : 0.95;
+    wetApronMat.roughness = rainy ? 0.5 : 0.9;
+  }
+
+  return { group, roadLines, blockCenters, landmarks, half, pitch, streetlights, heli, lightHeads, stallSpots, barrels, buildingCount: buildingRecords.length, setSeason };
 }

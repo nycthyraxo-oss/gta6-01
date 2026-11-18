@@ -30,6 +30,7 @@ export function createHud() {
   const cashEl = document.getElementById('hud-cash');
   const weaponEl = document.getElementById('hud-weapon');
   const weapon2El = document.getElementById('hud-weapon2');
+  const weapon3El = document.getElementById('hud-weapon3');
   const pursuersEl = document.getElementById('hud-pursuers');
   const districtEl = document.getElementById('hud-district-name');
   const healthFill = document.getElementById('hud-healthfill');
@@ -75,7 +76,8 @@ export function createHud() {
     distEl.textContent = state.targetDist != null ? `${Math.round(state.targetDist)} m` : '';
     const h = Math.floor(state.clockHour);
     const m = Math.floor((state.clockHour - h) * 60);
-    clockEl.textContent = `DAY ${state.day || 1} · ${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
+    const season = state.season ? ` · ${state.season}` : '';
+    clockEl.textContent = `DAY ${state.day || 1} · ${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}${season}`;
     if (progressEl) progressEl.style.width = `${Math.round((state.progress || 0) * 100)}%`;
     if (nextEl) {
       nextEl.textContent = state.nextMission ? `NEXT: ${state.nextMission}` : '';
@@ -93,10 +95,14 @@ export function createHud() {
     starsEl.textContent = stars;
     starsEl.style.color = state.stars > 0 ? '#ffd23e' : '#9aa0aa';
     cashEl.textContent = `$${Math.round(state.cash).toLocaleString('en-US')}`;
-    // Weapon slots: the pistol never runs dry (the ∞ is honest), the
-    // second slot stays empty until the story hands Rico another gun.
-    weaponEl.textContent = '1 · PISTOL ∞';
-    if (weapon2El) weapon2El.textContent = '2 · —';
+    // Weapon slots: the pistol and the knife never run dry (the ∞ is
+    // honest), the bazooka is limited rockets. The active slot carries
+    // the ◄ marker so the player always knows what is in hand.
+    const w = state.weapon || 0;
+    const rockets = state.rockets != null ? state.rockets : 8;
+    weaponEl.textContent = `1 · PISTOL ∞${w === 0 ? ' ◄' : ''}`;
+    if (weapon2El) weapon2El.textContent = `2 · KNIFE ∞${w === 1 ? ' ◄' : ''}`;
+    if (weapon3El) weapon3El.textContent = `3 · BAZOOKA ${rockets}${w === 2 ? ' ◄' : ''}`;
     if (pursuersEl) {
       const list = state.pursuers || [];
       if (list.length > 0) {

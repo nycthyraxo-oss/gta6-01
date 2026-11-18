@@ -13,6 +13,10 @@ export const ACTION_MAP = 64;
 export const ACTION_RADIO = 128;
 export const ACTION_NIGHT = 256;
 export const ACTION_SPAWN_CAR = 512;
+// v9 iteration 3: number keys switch weapon (1 pistol, 2 knife, 3 bazooka).
+export const ACTION_WEAPON_1 = 1024;
+export const ACTION_WEAPON_2 = 2048;
+export const ACTION_WEAPON_3 = 4096;
 
 const MOVE_KEYS = new Set(['KeyW', 'KeyA', 'KeyS', 'KeyD', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight']);
 
@@ -39,6 +43,9 @@ export function createInput(canvas) {
       else if (event.code === 'KeyL') actions |= ACTION_NIGHT;
       else if (event.code === 'KeyV') actions |= ACTION_SPAWN_CAR;
       else if (event.code === 'KeyR') actions |= ACTION_RESTART;
+      else if (event.code === 'Digit1') actions |= ACTION_WEAPON_1;
+      else if (event.code === 'Digit2') actions |= ACTION_WEAPON_2;
+      else if (event.code === 'Digit3') actions |= ACTION_WEAPON_3;
       else if (event.code === 'Enter' || event.code === 'Space') actions |= ACTION_CONFIRM;
     }
     if (MOVE_KEYS.has(event.code) || event.code === 'Space') event.preventDefault();

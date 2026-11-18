@@ -23,6 +23,10 @@ export const CONFIG = {
     runSpeed: 12,
     radius: 0.55,
     height: 1.8,
+    // Jump (v9 iteration 3): deterministic — one upward velocity, one
+    // gravity, land exactly on y = 0. No double-jump, no randomness.
+    jumpSpeed: 7.5,
+    jumpGravity: 24,
     maxHealth: 100,
     maxArmour: 100,
     armourOnJob: 20,
@@ -33,6 +37,13 @@ export const CONFIG = {
     shootCooldown: 0.22,
     enterCarRange: 4.5,
     respawnCost: 200,
+  },
+  // Weapons (v9 iteration 3): slot 1 pistol (infinite, as before), slot 2
+  // knife (melee, infinite), slot 3 bazooka (limited rockets). All damage
+  // flat and deterministic — no randomness anywhere in a weapon.
+  weapons: {
+    knife: { range: 2.4, damage: 50, cooldown: 0.35 },
+    bazooka: { rockets: 8, rocketSpeed: 42, blastRadius: 6, blastDamage: 60, cooldown: 0.9, range: 60 },
   },
   car: {
     accel: 22,
@@ -50,7 +61,7 @@ export const CONFIG = {
     policeSpeed: 30,
     conditionMinSpeed: 0.75,
   },
-  traffic: { count: 14, minGap: 9 },
+  traffic: { count: 22, minGap: 9 },
   pedestrians: { count: 26, walkSpeed: 1.6, fleeSpeed: 4.2, fleeRadius: 18 },
   police: {
     sightRange: 55,
@@ -59,6 +70,11 @@ export const CONFIG = {
     arrestRange: 3.0,
     arrestTime: 2.0,
     ramDamage: 6,
+    // v9 iteration 3: a short grace window after the first heat — the
+    // police spawn immediately but hold their reaction, so one accidental
+    // shot is never an instant death. patrolSpeed is the 1-star cruise.
+    graceSeconds: 4,
+    patrolSpeed: 8,
     maxCars: 4,
     maxOfficers: 3,
     heatPerStar: 100,

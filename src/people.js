@@ -268,7 +268,12 @@ export function updatePedestrian(p, dt, cfg, gunshotPos, isRoad) {
     joints.legR.rotation.x = p.state === 'vendor' ? 0 : swing;
     joints.rig.rotation.x = p.state === 'flee' ? 0.14 : 0.03;
   }
-  p.group.position.y = p.state === 'vendor' ? 0 : Math.abs(Math.sin(p.bob)) * 0.06;
+  // The walk cycle swings the legs and arms as a pendulum around the hip
+  // and shoulder pivots. The group itself NEVER lifts off the ground: the
+  // swinging foot rises naturally at the ends of its arc and plants at the
+  // centre, so a whole-body bounce on top of it read as floating
+  // ("melayang"). Group y stays 0 — feet planted.
+  p.group.position.y = 0;
 }
 
 export function spawnEnemy(scene, x, z, rng) {
