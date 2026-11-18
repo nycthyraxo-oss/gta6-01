@@ -32,18 +32,31 @@ export const CONFIG = {
     armourOnJob: 20,
     repPerJob: 10,
     repPerPackage: 2,
+    repPerRace: 5,
+    repPerStunt: 1,
     shootRange: 55,
     shootDamage: 34,
     shootCooldown: 0.22,
     enterCarRange: 4.5,
     respawnCost: 200,
+    // Pistol ammo (v9 iteration 4): the pistol is no longer infinite.
+    // 24 rounds on the belt, 60 max; Ammu-Nation sells 12 for $25.
+    pistolAmmo: 24,
+    pistolAmmoMax: 60,
   },
   // Weapons (v9 iteration 3): slot 1 pistol (infinite, as before), slot 2
   // knife (melee, infinite), slot 3 bazooka (limited rockets). All damage
   // flat and deterministic — no randomness anywhere in a weapon.
+  // v9 iteration 4: the pistol is limited ammo now, and the Ammu-Nation
+  // shop sells three more slots — SMG (REP 20), Shotgun (REP 40), Rifle
+  // (REP 60) — each with its own ammo pool, all bought, never infinite.
   weapons: {
+    pistol: { ammoPrice: 25, ammoPack: 12 },
     knife: { range: 2.4, damage: 50, cooldown: 0.35 },
-    bazooka: { rockets: 8, rocketSpeed: 42, blastRadius: 6, blastDamage: 60, cooldown: 0.9, range: 60 },
+    bazooka: { rockets: 8, rocketSpeed: 42, blastRadius: 6, blastDamage: 60, cooldown: 0.9, range: 60, rocketPrice: 60, rocketPack: 4 },
+    smg: { rep: 20, price: 400, damage: 22, cooldown: 0.09, range: 45, ammo: 90, maxAmmo: 180, ammoPrice: 30, ammoPack: 30, perp: 1.2 },
+    shotgun: { rep: 40, price: 800, damage: 60, cooldown: 0.7, range: 18, ammo: 24, maxAmmo: 48, ammoPrice: 30, ammoPack: 8, perp: 2.2 },
+    rifle: { rep: 60, price: 1200, damage: 55, cooldown: 0.16, range: 70, ammo: 40, maxAmmo: 120, ammoPrice: 30, ammoPack: 20, perp: 1.2 },
   },
   car: {
     accel: 22,
@@ -89,9 +102,44 @@ export const CONFIG = {
     heliSpotRadius: 9,
     searchZoneBase: 60,
     searchZonePerStar: 15,
+    // v9 iteration 4: 4 stars is heavy tactical — a 5th cruiser (TACTICAL,
+    // 1.1× speed) plus a second roadblock pair ahead as a coordinated
+    // ambush; 5 stars is MAXIMUM — the heli spotlight tracks the player.
+    maxCarsTactical: 5,
+    ambushStars: 4,
+    spotlightStars: 5,
   },
   economy: {
     resprayCost: 150,
+    // v9 iteration 4: money is a progression sink now. V costs $25 a car,
+    // a bribe takes 1 star off for $100, a repair is $80, armour $100.
+    spawnCarCost: 25,
+    bribeCost: 100,
+    repairCost: 80,
+    armourPrice: 100,
+  },
+  // v9 iteration 4: the two money sinks. Both on protected blocks, clear
+  // of mission lines, spawn, package spots and the docks duel. The gun
+  // shop sells weapons and ammo; Pay 'n' Spray repairs, repaints and
+  // takes bribes.
+  shops: {
+    gun: { x: -128, z: 40, name: 'AMMU-NATION COSTA' },
+    spray: { x: 96, z: 112, name: "PAY 'N' SPRAY" },
+  },
+  // v9 iteration 4: free-roam side activities. The street race starts on
+  // the garage road and runs three intersections for $300 + 5 REP; the
+  // three stunt ramps sit on road shoulders, clear of junctions and
+  // mission lines — hit one over 15 m/s and the car flies.
+  race: {
+    start: { x: -28, z: 84 },
+    checkpoints: [{ x: 84, z: 84 }, { x: 84, z: -28 }],
+    finish: { x: -28, z: -28 },
+    timeLimit: 75,
+    prize: 300,
+  },
+  stunts: {
+    prize: 100,
+    ramps: [{ x: 33, z: 56 }, { x: -135, z: -56 }, { x: 56, z: -135 }],
   },
   // Neon night: the look the L key switches to. Dusk is the default; night
   // is a dark sky, a moon-cold sun, and the street lamps turned all the way
@@ -108,8 +156,9 @@ export const CONFIG = {
     streetlight: 18,
   },
   // Spawn-a-car (V): a fast car on demand, with a cooldown and a cap so
-  // the city never floods with them.
-  spawnCarCooldown: 3,
+  // the city never floods with them. v9 iteration 4: it costs $25 a car
+  // now (money as a progression sink) and the cooldown is 20 s.
+  spawnCarCooldown: 20,
   spawnCarMax: 4,
   // Wanted evaded: how long after an escape the heat cannot rise again.
   evadeCooldown: 3,
@@ -136,9 +185,13 @@ export const CONFIG = {
     pitchMax: 0.9,
   },
   time: {
-    // The game lives at golden hour: a slow day (30 min per day) that
-    // starts at dusk, and the light code floors the dusk factor so the
-    // sunset never slides back into noon mid-session.
+    // v9 iteration 4: a continuous day cycle, not a binary toggle. The
+    // clock runs a slow day (30 min per day) from 18:24, and the light
+    // code interpolates keyframes by the hour — night, dawn, day, dusk,
+    // night — so the sky dome, sun, hemisphere light and fog density all
+    // move with the HUD clock. The dusk plateau (17.5–19.5) holds the old
+    // golden-hour look exactly, so staged shots still render the same dusk.
+    // L skips time forward 2 h instead of toggling night.
     dayLength: 1800,
     startHour: 18.4,
     duskHour: 18.5,
@@ -171,8 +224,14 @@ export const CONFIG = {
   // an emissive map (facadeEmissive scales it); rain falls in a box
   // around the camera (count streaks, fallSpeed m/s down, windSpeed m/s
   // sideways), with splashRings reusable splash rings on the ground.
+  // v9 iteration 4: bloom threshold 0.9 — only emissiveIntensity > 1
+  // blooms (neon signs, lamp bulbs, headlights, tracers, flashes). The
+  // facade windows sit at 0.9 on purpose: they glow, they do not bloom.
   graphics: {
     facadeEmissive: 0.9,
+    bloomThreshold: 0.9,
+    bloomStrength: 0.45,
+    bloomRadius: 0.4,
   },
   rain: {
     count: 600,
@@ -368,10 +427,14 @@ export const MISSION_DEFS = [
   },
 ];
 
-// Radio stations: three synthesized stations the player can cycle with Q.
-// Each has its own note set and step length, so the music actually changes.
+// Radio stations: synthesized stations the player can cycle with Q.
+// v9 iteration 4: 88.5 COSTA FM (synthwave/latin) and 102.4 REEF BEATS
+// (hip-hop/drill, slow low steps) join the old two, plus a RADIO OFF
+// state — Q cycles five states. Each has its own note set and step
+// length, so the music actually changes.
 export const RADIO_STATIONS = [
-  { name: '88.5 COSTA FM', notes: [220, 261.63, 329.63, 392, 329.63, 261.63, 196, 246.94], step: 0.42, bass: true },
+  { name: '88.5 COSTA FM', notes: [220, 261.63, 329.63, 392, 311.13, 261.63, 196, 246.94], step: 0.42, bass: true },
+  { name: '102.4 REEF BEATS', notes: [110, 110, 130.81, 98, 110, 164.81, 98, 110], step: 0.62, bass: true },
   { name: '92.1 NEON NIGHT', notes: [174.61, 220, 261.63, 220, 196, 174.61, 146.83, 196], step: 0.34, bass: true },
   { name: '97.3 PLAYA DUB', notes: [130.81, 164.81, 196, 164.81, 130.81, 98, 116.54, 146.83], step: 0.55, bass: true },
 ];

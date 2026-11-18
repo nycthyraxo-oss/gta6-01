@@ -18,12 +18,16 @@ import { makePersonMesh } from './people.js';
 
 // Per-star behaviour. chase=false means the car patrols the road grid
 // like any traffic car (updateTrafficCar) instead of hunting the player.
+// v9 iteration 4 (user decision 18 Nov 19:16 WIB — the OLD ladder stands,
+// the brief's "PIT at 2★" is CANCELLED): 1-2 stars never ram or shoot.
+// 4★ is heavy tactical (a 5th TACTICAL cruiser at 1.1× + a coordinated
+// ambush roadblock pair ahead); 5★ is MAXIMUM (heli spotlight tracks).
 const LADDER = {
   1: { chase: false, speed: 0, ram: false, arrest: false, officers: 0, arrestDelay: 0, turnRate: 2.2 },
   2: { chase: true, speed: 0.6, ram: false, arrest: false, officers: 1, arrestDelay: 0, standoff: 12, officerHold: 6, turnRate: 2.2 },
   3: { chase: true, speed: 0.85, ram: true, arrest: true, officers: 2, arrestDelay: 2.5, turnRate: 2.2 },
-  4: { chase: true, speed: 1.0, ram: true, arrest: true, officers: 3, arrestDelay: 2.0, turnRate: 2.6 },
-  5: { chase: true, speed: 1.15, ram: true, arrest: true, officers: 3, arrestDelay: 1.5, turnRate: 2.6 },
+  4: { chase: true, speed: 1.0, ram: true, arrest: true, officers: 3, arrestDelay: 2.0, turnRate: 2.6, tactical: true, ambush: true },
+  5: { chase: true, speed: 1.15, ram: true, arrest: true, officers: 3, arrestDelay: 1.5, turnRate: 2.6, tactical: true, ambush: true, spotlight: true },
 };
 //   - Search zone: when the cops last saw you, a circle is drawn on the
 //     radar around that spot. Heat only cools once you leave the circle
@@ -49,6 +53,10 @@ export function createWanted(cfg) {
     policeCars: [],
     officers: [],
     roadblocks: [],
+    // v9 iteration 4: the 4-star coordinated ambush — a second roadblock
+    // pair further ahead on the player's road. Kept separate from
+    // roadblocks so the 3-star check (2 cars) still reads exactly 2.
+    ambush: [],
     searchZone: null,
     heliActive: false,
     heliOverhead: false,
@@ -104,12 +112,14 @@ function nearestLine(lines, v) {
 }
 
 // Two Interceptors parked across the road ahead of the player, blocking it.
-function spawnRoadblock(wanted, scene, playerPos, heading, roadLines, rng) {
+// `distance` is how far ahead they sit (42 for the 3-star roadblock, 70
+// for the 4-star coordinated ambush); `key` is which list they go on.
+function spawnRoadblock(wanted, scene, playerPos, heading, roadLines, rng, distance = 42, key = 'roadblocks') {
   const alongZ = Math.abs(Math.cos(heading)) >= Math.abs(Math.sin(heading));
   const cars = [];
   if (alongZ) {
     const roadX = nearestLine(roadLines, playerPos.x);
-    const ahead = playerPos.z + Math.cos(heading) * 42;
+    const ahead = playerPos.z + Math.cos(heading) * distance;
     const z = Math.max(-140, Math.min(140, ahead));
     for (const dx of [-2.6, 2.6]) {
       const car = createCar(scene, roadX + dx, z, Math.PI / 2, 0x1a1a22, true, 0);
@@ -119,7 +129,7 @@ function spawnRoadblock(wanted, scene, playerPos, heading, roadLines, rng) {
     }
   } else {
     const roadZ = nearestLine(roadLines, playerPos.z);
-    const ahead = playerPos.x + Math.sin(heading) * 42;
+    const ahead = playerPos.x + Math.sin(heading) * distance;
     const x = Math.max(-140, Math.min(140, ahead));
     for (const dz of [-2.6, 2.6]) {
       const car = createCar(scene, x, roadZ + dz, 0, 0x1a1a22, true, 0);
@@ -128,7 +138,7 @@ function spawnRoadblock(wanted, scene, playerPos, heading, roadLines, rng) {
       cars.push(car);
     }
   }
-  wanted.roadblocks = cars;
+  wanted[key] = cars;
   return cars;
 }
 
@@ -138,6 +148,11 @@ function clearRoadblocks(wanted, scene) {
   // free them before the group leaves the scene.
   for (const car of wanted.roadblocks) { disposeCarMesh(car.group); scene.remove(car.group); }
   wanted.roadblocks = [];
+}
+
+function clearAmbush(wanted, scene) {
+  for (const car of wanted.ambush) { disposeCarMesh(car.group); scene.remove(car.group); }
+  wanted.ambush = [];
 }
 
 // Give a police car a patrol route on the road grid (1 star OBSERVE):
@@ -171,7 +186,11 @@ function assignPatrolRoute(wanted, car, rng) {
 }
 
 export function ensurePolice(wanted, scene, playerPos, rng, ctx) {
-  const want = Math.min(wanted.cfg.police.maxCars, wanted.stars);
+  // v9 iteration 4: at 4+ stars a 5th cruiser joins (heavy tactical).
+  const want = Math.min(
+    wanted.stars >= wanted.cfg.police.ambushStars ? wanted.cfg.police.maxCarsTactical : wanted.cfg.police.maxCars,
+    wanted.stars,
+  );
   if (ctx && ctx.roadLines) wanted.roadLines = ctx.roadLines;
   while (wanted.policeCars.length < want) {
     const p = spawnPointNear(wanted, playerPos, rng);
@@ -185,12 +204,22 @@ export function ensurePolice(wanted, scene, playerPos, rng, ctx) {
     disposeCarMesh(car.group);
     scene.remove(car.group);
   }
+  // The 4th and 5th cruisers at 4+ stars are TACTICAL units (1.1× speed).
+  wanted.policeCars.forEach((c, i) => {
+    c.tactical = wanted.stars >= wanted.cfg.police.ambushStars && i >= 3;
+  });
   // Roadblocks at 3+ stars, only when we know the road the player is on.
   if (ctx && ctx.roadLines) {
     if (wanted.stars >= wanted.cfg.police.roadblockStars && wanted.roadblocks.length === 0) {
-      spawnRoadblock(wanted, scene, playerPos, ctx.heading ?? 0, ctx.roadLines, rng);
+      spawnRoadblock(wanted, scene, playerPos, ctx.heading ?? 0, ctx.roadLines, rng, 42, 'roadblocks');
     } else if (wanted.stars < wanted.cfg.police.roadblockStars && wanted.roadblocks.length > 0) {
       clearRoadblocks(wanted, scene);
+    }
+    // Coordinated ambush at 4+ stars: a second pair, further ahead.
+    if (wanted.stars >= wanted.cfg.police.ambushStars && wanted.ambush.length === 0) {
+      spawnRoadblock(wanted, scene, playerPos, ctx.heading ?? 0, ctx.roadLines, rng, 70, 'ambush');
+    } else if (wanted.stars < wanted.cfg.police.ambushStars && wanted.ambush.length > 0) {
+      clearAmbush(wanted, scene);
     }
   }
   wanted.heliActive = wanted.stars >= wanted.cfg.police.heliStars;
@@ -210,7 +239,7 @@ export function pursuers(wanted, playerPos) {
     else if (wanted.stars === 2) status = d < 12 ? 'FOLLOWING' : 'CHASING';
     else status = d < 8 ? 'RAMMING' : d < 30 ? 'CHASING' : 'SEARCHING';
     list.push({
-      name: 'INTERCEPTOR',
+      name: car.tactical ? 'TACTICAL UNIT' : 'INTERCEPTOR',
       dist: Math.round(d),
       status,
       kind: 'car',
@@ -247,7 +276,7 @@ export function updatePolice(wanted, dt, scene, playerPos, playerInCar, onRam, o
   wanted.flash += dt;
   // Flash the light bars: red and blue alternate, twice a second.
   const phase = Math.floor(wanted.flash * 3) % 2 === 0;
-  for (const car of [...wanted.policeCars, ...wanted.roadblocks]) {
+  for (const car of [...wanted.policeCars, ...wanted.roadblocks, ...wanted.ambush]) {
     if (car.lightBar) {
       car.lightBar.left.color.setHex(phase ? 0xff2222 : 0x5a0f0f);
       car.lightBar.right.color.setHex(phase ? 0x1a1a66 : 0x2244ff);
@@ -331,7 +360,8 @@ export function updatePolice(wanted, dt, scene, playerPos, playerInCar, onRam, o
     car.heading += Math.max(-ladder.turnRate * dt, Math.min(ladder.turnRate * dt, dh));
     car.group.rotation.y = car.heading;
     const base = dist > 30 ? cfg.car.policeSpeed : cfg.car.policeSpeed * 0.75;
-    const chaseSpeed = base * ladder.speed;
+    // TACTICAL units (4th/5th cruiser at 4+ stars) run 1.1×.
+    const chaseSpeed = base * ladder.speed * (car.tactical ? 1.1 : 1);
     if (ladder.standoff && dist < ladder.standoff) {
       // 2 stars FOLLOW: hold the standoff, do not close in.
       car.speed += (0 - car.speed) * Math.min(1, dt * 1.5);
@@ -414,6 +444,7 @@ export function clearPolice(wanted, scene) {
   for (const o of wanted.officers) scene.remove(o.group);
   wanted.officers = [];
   clearRoadblocks(wanted, scene);
+  clearAmbush(wanted, scene);
   wanted.heat = 0;
   wanted.stars = 0;
   wanted.arrestTimer = 0;

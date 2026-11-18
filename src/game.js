@@ -24,7 +24,7 @@ import { createWanted, addHeat, setStars, ensurePolice, updatePolice, clearPolic
 import { createMissions, startMission, updateMission, completeMission, failMission, currentMission, currentTarget, missionObjectiveText, stageLabel, missionProgress, nextMissionTitle, advanceDialogue, DIALOGUE_LINE_SECONDS } from './missions.js';
 import { createAudio } from './audio.js';
 import { createHud } from './hud.js';
-import { createInput, ACTION_ENTER, ACTION_SHOOT, ACTION_PAUSE, ACTION_MUTE, ACTION_RESTART, ACTION_CONFIRM, ACTION_MAP, ACTION_RADIO, ACTION_NIGHT, ACTION_SPAWN_CAR, ACTION_WEAPON_1, ACTION_WEAPON_2, ACTION_WEAPON_3 } from './input.js';
+import { createInput, ACTION_ENTER, ACTION_SHOOT, ACTION_PAUSE, ACTION_MUTE, ACTION_RESTART, ACTION_CONFIRM, ACTION_MAP, ACTION_RADIO, ACTION_NIGHT, ACTION_SPAWN_CAR, ACTION_WEAPON_1, ACTION_WEAPON_2, ACTION_WEAPON_3, ACTION_WEAPON_4, ACTION_WEAPON_5, ACTION_WEAPON_6 } from './input.js';
 import { createPackages } from './packages.js';
 import { updateLights, lightFor } from './trafficlights.js';
 
@@ -40,6 +40,7 @@ export const SCREEN_PAUSED = 'paused';
 export const SCREEN_OVER = 'over';
 export const SCREEN_MAP = 'map';
 export const SCREEN_JOB = 'job';
+export const SCREEN_SHOP = 'shop';
 
 function clamp(v, lo, hi) {
   return Math.max(lo, Math.min(hi, v));
@@ -72,25 +73,74 @@ export function createGame(canvas, seed) {
 
   const scene = new THREE.Scene();
   scene.background = new THREE.Color(cfg.palette.skyDusk);
-  scene.fog = new THREE.Fog(cfg.palette.fog, cfg.palette.fogNear, cfg.palette.fogFar);
+  // v9 iteration 4: exponential fog — the density now moves with the
+  // day cycle (thicker at night, thinner at noon) instead of a fixed
+  // linear range. updateDaylight() owns scene.fog.density.
+  scene.fog = new THREE.FogExp2(cfg.palette.fog, 0.0022);
   const camera = new THREE.PerspectiveCamera(62, window.innerWidth / window.innerHeight, 0.1, 900);
 
   // v8 graphics: post-processing chain — scene -> neon bloom -> ACES/sRGB
-  // output. Bloom is deliberately modest (strength 0.35, threshold 0.85)
-  // so only the bright neon, lamps and flashes glow; the dusk sky and the
-  // HUD (DOM, untouched by the canvas chain) stay clean. The bloom pass
-  // runs at half resolution to keep SwiftShader frame cost down.
+  // output. v9 iteration 4: the threshold comes from config (0.9) so
+  // only emissiveIntensity > 1 blooms — neon signs, lamp bulbs,
+  // headlights, tracers and flashes. The bloom pass runs at half
+  // resolution to keep SwiftShader frame cost down.
   const composer = new EffectComposer(renderer);
   composer.addPass(new RenderPass(scene, camera));
   const bloomPass = new UnrealBloomPass(
     new THREE.Vector2(Math.floor(window.innerWidth / 2), Math.floor(window.innerHeight / 2)),
-    0.45, // strength
-    0.4,  // radius
-    0.85, // threshold
+    cfg.graphics.bloomStrength, // strength
+    cfg.graphics.bloomRadius,  // radius
+    cfg.graphics.bloomThreshold, // threshold
   );
   composer.addPass(bloomPass);
   composer.addPass(new OutputPass());
   function renderFrame() { composer.render(); }
+
+  // v9 iteration 4: PMREM environment map for PBR reflections. There is
+  // no RoomEnvironment addon in the vendored set, so the environment is
+  // a tiny procedural scene — a gradient sky sphere and three neon
+  // boxes — baked once through PMREMGenerator. scene.environment gives
+  // every MeshStandardMaterial a reflection to work with, which is what
+  // makes the wet asphalt (roughness 0.28) read.
+  {
+    const pmrem = new THREE.PMREMGenerator(renderer);
+    const envScene = new THREE.Scene();
+    const envSky = new THREE.Mesh(
+      new THREE.SphereGeometry(50, 16, 8),
+      new THREE.MeshBasicMaterial({
+        side: THREE.BackSide,
+        vertexColors: true,
+      }),
+    );
+    const envColors = [];
+    const envPos = envSky.geometry.attributes.position;
+    for (let i = 0; i < envPos.count; i += 1) {
+      const y = envPos.getY(i) / 50;
+      const c = y > 0.3
+        ? [0.25, 0.12, 0.45]
+        : y > -0.1
+          ? [0.9, 0.45, 0.55]
+          : [0.1, 0.08, 0.15];
+      envColors.push(c[0], c[1], c[2]);
+    }
+    envSky.geometry.setAttribute('color', new THREE.Float32BufferAttribute(envColors, 3));
+    envScene.add(envSky);
+    for (const [ex, ey, ez, er, eg, eb] of [
+      [10, 4, -8, 2.2, 0.4, 1.6],
+      [-12, 6, 10, 0.4, 2.0, 2.0],
+      [0, 8, 14, 2.0, 1.7, 0.4],
+    ]) {
+      const neonBox = new THREE.Mesh(
+        new THREE.BoxGeometry(6, 2, 1),
+        new THREE.MeshBasicMaterial({ color: new THREE.Color(er, eg, eb) }),
+      );
+      neonBox.position.set(ex, ey, ez);
+      envScene.add(neonBox);
+    }
+    const envRT = pmrem.fromScene(envScene, 0.04);
+    scene.environment = envRT.texture;
+    pmrem.dispose();
+  }
 
   // Sunset sky dome: a big inverted sphere shaded by height — violet top,
   // pink band, orange horizon. It never fogs, so the gradient stays clean
@@ -296,7 +346,63 @@ export function createGame(canvas, seed) {
   heliPool.position.y = 0.12;
   heliPool.visible = false;
   scene.add(heliPool);
-  const audio = createAudio();
+
+  // Police vision cones (v9 iteration 4): translucent cones projected
+  // 20 m ahead of each cruiser while the player is wanted — the player
+  // can SEE the police line of sight, and the HUD flashes
+  // "SPOTLIGHT ON YOU — BREAK LINE OF SIGHT" while standing in one.
+  // Pooled (4, one per cruiser at most); the cone is a flattened
+  // cylinder, open-ended, rotated to lie along the car's heading.
+  const visionCones = [];
+  for (let i = 0; i < 4; i += 1) {
+    const cone = new THREE.Mesh(
+      new THREE.CylinderGeometry(6, 0.6, 20, 16, 1, true),
+      new THREE.MeshBasicMaterial({
+        color: 0xffd23e, transparent: true, opacity: 0.14,
+        side: THREE.DoubleSide, depthWrite: false,
+      }),
+    );
+    cone.visible = false;
+    scene.add(cone);
+    visionCones.push(cone);
+  }
+  function updateVisionCones() {
+    const cars = wanted.policeCars;
+    visionCones.forEach((cone, i) => {
+      const car = cars[i];
+      if (!car || wanted.stars === 0) {
+        cone.visible = false;
+        return;
+      }
+      const pos = car.group.position;
+      cone.visible = true;
+      cone.position.set(
+        pos.x + Math.sin(car.heading) * 10,
+        1.2,
+        pos.z + Math.cos(car.heading) * 10,
+      );
+      cone.rotation.order = 'YXZ';
+      cone.rotation.y = car.heading;
+      cone.rotation.x = Math.PI / 2;
+    });
+  }
+  // Is the player standing inside any police vision cone? The cone is
+  // 20 long, 6 wide at the far end — a point is inside when it is ahead
+  // of the car, within 20, and within the widening half-width.
+  function inVisionCone(px, pz) {
+    for (const car of wanted.policeCars) {
+      const pos = car.group.position;
+      const dx = px - pos.x;
+      const dz = pz - pos.z;
+      const along = dx * Math.sin(car.heading) + dz * Math.cos(car.heading);
+      if (along < 0 || along > 20) continue;
+      const perp = Math.abs(dx * Math.cos(car.heading) - dz * Math.sin(car.heading));
+      if (perp < 0.6 + (along / 20) * 5.4) return true;
+    }
+    return false;
+  }
+
+  const audio = createAudio(camera, scene);
   const hud = createHud();
   const input = createInput(canvas);
   const wanted = createWanted(cfg);
@@ -327,6 +433,17 @@ export function createGame(canvas, seed) {
     rockets: cfg.weapons.bazooka.rockets,
     swingT: 0,
     prevBrake: false,
+    // v9 iteration 4: ammo is limited now — the pistol starts with 24
+    // rounds (max 60) and the shop weapons carry their own magazines.
+    // Money buys ammo at Ammu-Nation; running dry means a knife fight.
+    ammo: cfg.player.pistolAmmo,
+    smgAmmo: 0,
+    shotgunAmmo: 0,
+    rifleAmmo: 0,
+    owned: { smg: false, shotgun: false, rifle: false },
+    // REP earned outside missions (races +1 stunt, +5 a race) — saved,
+    // and it counts toward the mission-6 REP gate.
+    repBonus: 0,
   };
   playerMesh.position.set(-112, 0, 60);
 
@@ -399,6 +516,23 @@ export function createGame(canvas, seed) {
   beaconRing.position.set(city.landmarks.garage.x, 0.1, city.landmarks.garage.z);
   scene.add(beaconRing);
 
+  // Street race rings (v9 iteration 4): flat rings on the road at the
+  // start, the two checkpoints and the finish. Dim grey while inactive,
+  // gold on the current target, green once passed. Hidden until a race
+  // starts.
+  const raceRings = [];
+  for (const pt of [cfg.race.start, ...cfg.race.checkpoints, cfg.race.finish]) {
+    const ring = new THREE.Mesh(
+      new THREE.RingGeometry(3, 4.5, 24),
+      new THREE.MeshBasicMaterial({ color: 0x555555, transparent: true, opacity: 0.6, side: THREE.DoubleSide, depthWrite: false }),
+    );
+    ring.rotation.x = -Math.PI / 2;
+    ring.position.set(pt.x, 0.1, pt.z);
+    ring.visible = false;
+    scene.add(ring);
+    raceRings.push(ring);
+  }
+
   // Traffic, parked cars and the orange coupe for mission 2.
   const traffic = [];
   for (let i = 0; i < cfg.traffic.count; i += 1) {
@@ -441,12 +575,13 @@ export function createGame(canvas, seed) {
 
   // Tracer bolts: thin glowing boxes, not 1 px lines — a 1 px line is
   // invisible in a screenshot, a bolt reads as a gunshot from any angle.
-  // Pooled so shooting never allocates.
+  // Pooled so shooting never allocates. v9 iteration 4: HDR colour so
+  // the bolt blooms (threshold 0.9).
   const tracers = [];
   for (let i = 0; i < 8; i += 1) {
     const m = new THREE.Mesh(
       new THREE.BoxGeometry(0.14, 0.14, 1),
-      new THREE.MeshBasicMaterial({ color: 0xffe9a8, transparent: true, opacity: 0 }),
+      new THREE.MeshBasicMaterial({ color: new THREE.Color(2.2, 1.9, 1.0), transparent: true, opacity: 0 }),
     );
     m.visible = false;
     scene.add(m);
@@ -455,7 +590,7 @@ export function createGame(canvas, seed) {
   let tracerNext = 0;
   const muzzle = new THREE.Mesh(
     new THREE.SphereGeometry(0.3, 8, 6),
-    new THREE.MeshBasicMaterial({ color: 0xffd23e }),
+    new THREE.MeshBasicMaterial({ color: new THREE.Color(2.2, 1.8, 0.5) }),
   );
   muzzle.visible = false;
   scene.add(muzzle);
@@ -490,9 +625,10 @@ export function createGame(canvas, seed) {
     rockets.push({ mesh: g, active: false, dx: 0, dz: 0, life: 0 });
   }
   // Explosion flash: one expanding orange sphere, reused for every blast.
+  // v9 iteration 4: HDR so the blast blooms.
   const blastFlash = new THREE.Mesh(
     new THREE.SphereGeometry(0.5, 12, 10),
-    new THREE.MeshBasicMaterial({ color: 0xffa62e, transparent: true, opacity: 0 }),
+    new THREE.MeshBasicMaterial({ color: new THREE.Color(2.2, 1.2, 0.35), transparent: true, opacity: 0 }),
   );
   blastFlash.visible = false;
   scene.add(blastFlash);
@@ -501,7 +637,7 @@ export function createGame(canvas, seed) {
   // the combat frame shows where the bolt lands instead of a bare line end.
   const impactGlow = new THREE.Mesh(
     new THREE.SphereGeometry(0.55, 10, 8),
-    new THREE.MeshBasicMaterial({ color: 0xffc23e }),
+    new THREE.MeshBasicMaterial({ color: new THREE.Color(2.2, 1.5, 0.5) }),
   );
   impactGlow.visible = false;
   scene.add(impactGlow);
@@ -509,7 +645,7 @@ export function createGame(canvas, seed) {
   for (let i = 0; i < 40; i += 1) {
     const p = new THREE.Mesh(
       new THREE.BoxGeometry(0.18, 0.18, 0.18),
-      new THREE.MeshBasicMaterial({ color: 0xffc860 }),
+      new THREE.MeshBasicMaterial({ color: new THREE.Color(1.9, 1.2, 0.4) }),
     );
     p.visible = false;
     scene.add(p);
@@ -541,6 +677,34 @@ export function createGame(canvas, seed) {
     s.life = 0.7;
   }
 
+  // Water burst: blue spheres for a smashed hydrant (v9 iteration 4).
+  // Pooled like the smoke — a hydrant sprays for 2 s, then the pool
+  // recycles. No new allocation per smash.
+  const water = [];
+  for (let i = 0; i < 10; i += 1) {
+    const w = new THREE.Mesh(
+      new THREE.SphereGeometry(0.35, 8, 6),
+      new THREE.MeshBasicMaterial({ color: new THREE.Color(0.4, 1.4, 2.0), transparent: true, opacity: 0 }),
+    );
+    w.visible = false;
+    scene.add(w);
+    water.push({ mesh: w, life: 0, vx: 0, vy: 0, vz: 0 });
+  }
+  let waterNext = 0;
+  function burstWater(x, y, z, n) {
+    for (let i = 0; i < n; i += 1) {
+      const w = water[waterNext];
+      waterNext = (waterNext + 1) % water.length;
+      w.mesh.position.set(x, y, z);
+      w.mesh.visible = true;
+      w.mesh.material.opacity = 0.85;
+      w.life = 0.8 + Math.random() * 0.5;
+      w.vx = (Math.random() - 0.5) * 4;
+      w.vy = Math.random() * 6 + 3;
+      w.vz = (Math.random() - 0.5) * 4;
+    }
+  }
+
   const state = {
     screen: SCREEN_TITLE,
     clockHour: cfg.time.startHour,
@@ -555,10 +719,33 @@ export function createGame(canvas, seed) {
     time: 0,
     shotMode: false,
     resprayCooldown: 0,
-    // Neon night (L): dusk is the default look; night is a toggle, never
-    // a clock state, so staged shots always render the same dusk.
-    nightMode: false,
+    // v9 iteration 4: L skips time forward 2 h now — the continuous day
+    // cycle replaces the binary night toggle, so nightMode is gone.
     spawnCarCooldown: 0,
+    // Wall time of the last gunshot, for ped panic (any weapon scares
+    // the crowd — the old code only panicked peds on the pistol's
+    // cooldown edge). Updated on every shot, knife swing and blast.
+    lastShotAt: -99,
+    // Wall time of the last camera input, for the drive-by override:
+    // while the player is actively aiming from a car, the camera does
+    // not auto-trail back to the car heading.
+    lastAimTime: 0,
+    // Camera blend 0-1 while entering/exiting a car (smooth lerp
+    // between the foot and car camera positions).
+    camBlend: 1,
+    // Stunt slow-mo: seconds of 0.45× time left after a ramp launch.
+    slowmo: 0,
+    // Air time while a car is airborne off a stunt ramp (vy of the car).
+    carAir: 0,
+    // Reef Kings faction aggro: the player entered the docks, or hurt a
+    // King. Aggro Kings close in faster, shoot further, hit more often.
+    factionAggro: false,
+    // Street race state: null when idle, otherwise { cp, timeLeft }.
+    // raceArmed gates the start line: a race that just ended (win or
+    // timeout) must not re-trigger while the car is still sitting on
+    // the start line — the player has to drive out past 8 m first.
+    race: null,
+    raceArmed: true,
   };
 
   // Wanted stars on the previous step, for the evaded toast: the toast
@@ -567,6 +754,10 @@ export function createGame(canvas, seed) {
   let prevGrace = 0;
   // Cars the V key spawned (capped, oldest removed first).
   const spawnedCars = [];
+  // Free-roam progress (v9 iteration 4): races won and stunts landed.
+  // Both feed REP (a race is worth 5, a stunt 1) and both are saved.
+  let racesWon = 0;
+  let stunts = 0;
 
   // One-shot presses are collected once per frame here and consumed by the
   // first fixed step, so pause/mute work even while the game is paused
@@ -615,6 +806,19 @@ export function createGame(canvas, seed) {
       pendingActions = 0;
       return;
     }
+    // The shop screen (v9 iteration 4): number keys buy, E or Esc
+    // closes. Digits are drained every frame so a stale key never fires
+    // a purchase after the shop closes.
+    if (state.screen === SCREEN_SHOP) {
+      const digit = input.takeDigit();
+      if (digit >= 1 && digit <= 9) buyShop(digit);
+      if (pendingActions & (ACTION_ENTER | ACTION_PAUSE)) {
+        pendingActions &= ~(ACTION_ENTER | ACTION_PAUSE);
+        closeShop();
+      }
+      pendingActions = 0;
+      return;
+    }
     if (pendingActions & ACTION_MAP) {
       pendingActions &= ~ACTION_MAP;
       if (state.screen === SCREEN_PLAY) {
@@ -637,15 +841,19 @@ export function createGame(canvas, seed) {
         hud.showMessage(`♪ ${name}`, 2);
       }
     }
-    // L: neon night. A toggle, not a clock state — dusk is the default,
-    // night is the player's choice, and the staged shots always render
-    // the same dusk because the toggle starts off.
+    // L: skip time forward 2 h (v9 iteration 4). The continuous day
+    // cycle replaces the binary night toggle — the sun, sky, fog and
+    // lamps all move with the clock, and L just jumps the clock ahead.
     if (pendingActions & ACTION_NIGHT) {
       pendingActions &= ~ACTION_NIGHT;
       if (state.screen === SCREEN_PLAY) {
-        state.nightMode = !state.nightMode;
+        state.clockHour += 2;
+        if (state.clockHour >= 24) {
+          state.clockHour -= 24;
+          state.day += 1;
+        }
         updateDaylight();
-        hud.showMessage(state.nightMode ? 'Neon night — the city lights up' : 'Golden hour — dusk returns', 3);
+        hud.showMessage(`Time skips ahead — ${hud.clockText(state.clockHour, state.day)}`, 3);
       }
     }
     if (pendingActions & ACTION_PAUSE) {
@@ -761,6 +969,7 @@ export function createGame(canvas, seed) {
       enemies,
       policeCars: wanted.policeCars,
       roadblocks: wanted.roadblocks,
+      shops: cfg.shops,
       playerX: pp.x,
       playerZ: pp.z,
       playerHeading: player.inCar && player.car ? player.car.heading : player.heading,
@@ -768,10 +977,11 @@ export function createGame(canvas, seed) {
     };
   }
 
-  // Reputation: jobs done and packages found. It is a count of what Rico
-  // has actually done in the city, not a bar to grind.
+  // Reputation: jobs done and packages found, plus REP earned outside
+  // missions (races and stunts). It is a count of what Rico has
+  // actually done in the city, not a bar to grind.
   function repPoints() {
-    return missions.index * cfg.player.repPerJob + packages.count() * cfg.player.repPerPackage;
+    return missions.index * cfg.player.repPerJob + packages.count() * cfg.player.repPerPackage + player.repBonus;
   }
 
   // Respray at Taller Marla: drive into the garage while wanted and the
@@ -790,6 +1000,11 @@ export function createGame(canvas, seed) {
     car.wheels = mesh.wheels;
     car.driver = mesh.driver;
     car.lightBar = mesh.lightBar;
+    // v9 iteration 4: the new mesh has new head/tail light materials —
+    // keep the references in step or the brake-light brightening would
+    // write into a disposed material.
+    car.headMat = mesh.headMat;
+    car.tailMat = mesh.tailMat;
     car.driver.visible = true;
     car.color = spec.color;
     car.name = spec.name;
@@ -801,6 +1016,84 @@ export function createGame(canvas, seed) {
     // geometries/materials are never in the owned list, so the other cars
     // are untouched.
     disposeCarMesh(oldGroup);
+  }
+
+  // The shops (v9 iteration 4): money is a progression sink. Ammu-Nation
+  // sells ammo and the three REP-gated weapons; Pay 'n' Spray repairs the
+  // car, repaints it (clears the heat), and takes a bribe (one star off).
+  // E opens the shop when the player is on foot near the door; the menu
+  // is a DOM overlay, 1-9 buys, E/Esc closes.
+  let shopKind = null;
+  function gunMenuItems() {
+    const w = cfg.weapons;
+    return [
+      { key: 1, label: `Pistol ammo +${w.pistol.ammoPack}`, price: w.pistol.ammoPrice, can: () => player.ammo < cfg.player.pistolAmmoMax, buy: () => { player.ammo = Math.min(cfg.player.pistolAmmoMax, player.ammo + w.pistol.ammoPack); } },
+      { key: 2, label: `SMG ammo +${w.smg.ammoPack}`, price: w.smg.ammoPrice, can: () => player.owned.smg && player.smgAmmo < w.smg.maxAmmo, buy: () => { player.smgAmmo = Math.min(w.smg.maxAmmo, player.smgAmmo + w.smg.ammoPack); } },
+      { key: 3, label: `Shotgun shells +${w.shotgun.ammoPack}`, price: w.shotgun.ammoPrice, can: () => player.owned.shotgun && player.shotgunAmmo < w.shotgun.maxAmmo, buy: () => { player.shotgunAmmo = Math.min(w.shotgun.maxAmmo, player.shotgunAmmo + w.shotgun.ammoPack); } },
+      { key: 4, label: `Rifle ammo +${w.rifle.ammoPack}`, price: w.rifle.ammoPrice, can: () => player.owned.rifle && player.rifleAmmo < w.rifle.maxAmmo, buy: () => { player.rifleAmmo = Math.min(w.rifle.maxAmmo, player.rifleAmmo + w.rifle.ammoPack); } },
+      { key: 5, label: `Rockets +${w.bazooka.rocketPack}`, price: w.bazooka.rocketPrice, can: () => player.rockets < w.bazooka.rockets, buy: () => { player.rockets = Math.min(w.bazooka.rockets, player.rockets + w.bazooka.rocketPack); } },
+      { key: 6, label: 'Armour +50', price: cfg.economy.armourPrice, can: () => player.armour < cfg.player.maxArmour, buy: () => { player.armour = Math.min(cfg.player.maxArmour, player.armour + 50); } },
+      { key: 7, label: `SMG — $${w.smg.price} (REP ${w.smg.rep})`, price: w.smg.price, can: () => !player.owned.smg && repPoints() >= w.smg.rep, buy: () => { player.owned.smg = true; player.smgAmmo = w.smg.ammo; } },
+      { key: 8, label: `Shotgun — $${w.shotgun.price} (REP ${w.shotgun.rep})`, price: w.shotgun.price, can: () => !player.owned.shotgun && repPoints() >= w.shotgun.rep, buy: () => { player.owned.shotgun = true; player.shotgunAmmo = w.shotgun.ammo; } },
+      { key: 9, label: `Rifle — $${w.rifle.price} (REP ${w.rifle.rep})`, price: w.rifle.price, can: () => !player.owned.rifle && repPoints() >= w.rifle.rep, buy: () => { player.owned.rifle = true; player.rifleAmmo = w.rifle.ammo; } },
+    ];
+  }
+  function sprayMenuItems() {
+    return [
+      { key: 1, label: 'Repair car (condition 100)', price: cfg.economy.repairCost, can: () => !!player.car && (player.car.condition ?? 100) < 100, buy: () => { player.car.condition = 100; } },
+      { key: 2, label: 'Repaint — clears the heat', price: cfg.economy.resprayCost, can: () => !!player.car && wanted.stars > 0, buy: () => { if (player.car) resprayCar(player.car); setStars(wanted, 0); } },
+      { key: 3, label: 'Bribe — one star off', price: cfg.economy.bribeCost, can: () => wanted.stars > 0, buy: () => { setStars(wanted, wanted.stars - 1); } },
+    ];
+  }
+  function shopMenuItems() {
+    return shopKind === 'gun' ? gunMenuItems() : sprayMenuItems();
+  }
+  // Which shop (if any) the player is standing at — within 8 m of the
+  // door, on foot. The gun shop and the spray are 100+ m apart, so the
+  // two checks never both fire.
+  function nearShop() {
+    const pp = playerPos();
+    if (Math.hypot(pp.x - cfg.shops.gun.x, pp.z - cfg.shops.gun.z) < 8) return 'gun';
+    if (Math.hypot(pp.x - cfg.shops.spray.x, pp.z - cfg.shops.spray.z) < 8) return 'spray';
+    return null;
+  }
+  function openShop(kind) {
+    shopKind = kind;
+    state.screen = SCREEN_SHOP;
+    const shop = kind === 'gun' ? cfg.shops.gun : cfg.shops.spray;
+    document.getElementById('shop-title').textContent = shop.name;
+    renderShopItems();
+    document.getElementById('screen-shop').style.display = 'flex';
+    document.getElementById('hud').style.display = 'none';
+    audio.click();
+  }
+  function renderShopItems() {
+    const el = document.getElementById('shop-items');
+    el.innerHTML = shopMenuItems().map((it) => {
+      const ok = it.can();
+      const afford = player.cash >= it.price;
+      const cls = ok && afford ? '' : ' class="off"';
+      const why = !ok ? ' — not available' : !afford ? ' — not enough cash' : '';
+      return `<div${cls}>${it.key} · ${it.label} — $${it.price}${why}</div>`;
+    }).join('');
+    document.getElementById('shop-cash').textContent = `CASH $${Math.round(player.cash)}  ·  REP ${repPoints()}`;
+  }
+  function closeShop() {
+    shopKind = null;
+    document.getElementById('screen-shop').style.display = 'none';
+    document.getElementById('hud').style.display = 'block';
+    state.screen = SCREEN_PLAY;
+  }
+  function buyShop(digit) {
+    const it = shopMenuItems().find((i) => i.key === digit);
+    if (!it) return;
+    if (!it.can()) { hud.showMessage('Not available yet.', 2); return; }
+    if (player.cash < it.price) { hud.showMessage('Not enough cash.', 2); return; }
+    player.cash -= it.price;
+    it.buy();
+    audio.pickup();
+    hud.showMessage(`Bought: ${it.label}`, 2);
+    renderShopItems();
   }
 
   // A battered car is slower: condition 100 runs full speed, condition 0
@@ -842,6 +1135,10 @@ export function createGame(canvas, seed) {
     player.inCar = true;
     player.car = car;
     playerMesh.visible = false;
+    // v9 iteration 4: smooth camera lerp on entering the car — the
+    // camera blends from the foot distance to the car distance instead
+    // of snapping. updateCamera reads state.camBlend (see below).
+    state.camBlend = 0;
     if (car.isTarget) addHeat(wanted, cfg.police.stealHeat);
     else addHeat(wanted, cfg.police.stealHeat * 0.6);
     audio.pickup();
@@ -864,6 +1161,8 @@ export function createGame(canvas, seed) {
     player.heading = car.heading;
     player.inCar = false;
     player.car = null;
+    // v9 iteration 4: smooth camera lerp on exiting the car.
+    state.camBlend = 0;
   }
 
   // V: spawn a fast car on the nearest road, a few metres ahead of the
@@ -879,6 +1178,14 @@ export function createGame(canvas, seed) {
       return;
     }
     if (state.spawnCarCooldown > 0) return;
+    // v9 iteration 4: V costs $25 a car (money as a progression sink).
+    // The check runs BEFORE the cooldown is set, so a broke player can
+    // keep trying — the cooldown only starts on a successful spawn.
+    if (player.cash < cfg.economy.spawnCarCost) {
+      hud.showMessage(`A fast car costs $${cfg.economy.spawnCarCost} — earn more first. (V)`, 3);
+      return;
+    }
+    player.cash -= cfg.economy.spawnCarCost;
     state.spawnCarCooldown = cfg.spawnCarCooldown;
     const pp = playerPos();
     let bestLine = city.roadLines[0];
@@ -929,8 +1236,10 @@ export function createGame(canvas, seed) {
 
   // One enemy hurt, by bullet or by barrel blast. Shared so a barrel
   // that finishes a Reef King counts exactly like a bullet that does.
+  // v9 iteration 4: hurting a King aggros the whole faction.
   function hurtEnemy(e, dmg) {
     if (!e.alive) return;
+    state.factionAggro = true;
     e.health -= dmg;
     if (e.health <= 0) {
       e.alive = false;
@@ -964,6 +1273,8 @@ export function createGame(canvas, seed) {
     if (player.shootCooldown > 0) return;
     player.shootCooldown = cfg.weapons.knife.cooldown;
     player.swingT = 0.25;
+    // A swing is a gunshot as far as the crowd is concerned.
+    state.lastShotAt = state.time;
     const origin = playerMesh.position;
     const dir = { x: Math.sin(state.camYaw), z: Math.cos(state.camYaw) };
     let best = null;
@@ -1029,6 +1340,7 @@ export function createGame(canvas, seed) {
     if (!slot) return;
     player.shootCooldown = cfg.weapons.bazooka.cooldown;
     player.rockets -= 1;
+    state.lastShotAt = state.time;
     const origin = player.inCar && player.car
       ? player.car.group.position.clone().setY(1.4)
       : playerMesh.position.clone().setY(1.5);
@@ -1088,6 +1400,11 @@ export function createGame(canvas, seed) {
         blastT = 0.35;
         state.shake = Math.max(state.shake || 0, 0.6);
         audio.crash();
+        // v9 iteration 4: the blast is a positional sound at its real
+        // position, and it scares the crowd like a gunshot does.
+        audio.positionalShot(ex, 1.4, ez, 'blast');
+        state.lastShotAt = state.time;
+        for (const p of pedestrians) updatePedestrian(p, 0, cfg, { x: ex, z: ez });
         const R = cfg.weapons.bazooka.blastRadius;
         for (const e of enemies) {
           if (!e.alive) continue;
@@ -1118,21 +1435,17 @@ export function createGame(canvas, seed) {
     }
   }
 
-  function shoot() {
-    // Weapon dispatch (v9 iteration 3): the knife swings in front, the
-    // bazooka launches a rocket. In a car the knife falls back to the
-    // pistol (no room to swing); the bazooka fires from the car.
-    if (!player.inCar && player.weapon === 1) { knifeSwing(); return; }
-    if (player.weapon === 2) { fireRocket(); return; }
-    if (player.shootCooldown > 0) return;
-    player.shootCooldown = cfg.player.shootCooldown;
+  // One hitscan path for all four guns (v9 iteration 4): each gun has
+  // its own damage, cooldown, range, spread (perp tolerance) and
+  // magazine. The pistol is weapon 0, SMG 3, shotgun 4, rifle 5.
+  function fireHitscan(damage, range, perp) {
     const origin = player.inCar && player.car
       ? player.car.group.position.clone().setY(1.4)
       : playerMesh.position.clone().setY(1.5);
     const dir = { x: Math.sin(state.camYaw), z: Math.cos(state.camYaw) };
-    const end = { x: origin.x + dir.x * cfg.player.shootRange, y: 1.2, z: origin.z + dir.z * cfg.player.shootRange };
+    const end = { x: origin.x + dir.x * range, y: 1.2, z: origin.z + dir.z * range };
     let hit = null;
-    let hitDist = cfg.player.shootRange;
+    let hitDist = range;
     // Enemies first.
     for (const e of enemies) {
       if (!e.alive) continue;
@@ -1140,8 +1453,8 @@ export function createGame(canvas, seed) {
       const dz = e.group.position.z - origin.z;
       const along = dx * dir.x + dz * dir.z;
       if (along < 0 || along > hitDist) continue;
-      const perp = Math.abs(dx * dir.z - dz * dir.x);
-      if (perp < 1.2) {
+      const p = Math.abs(dx * dir.z - dz * dir.x);
+      if (p < perp) {
         hit = { kind: 'enemy', obj: e, dist: along };
         hitDist = along;
       }
@@ -1157,8 +1470,8 @@ export function createGame(canvas, seed) {
         const dz = b.z - origin.z;
         const along = dx * dir.x + dz * dir.z;
         if (along < 0 || along > hitDist) continue;
-        const perp = Math.abs(dx * dir.z - dz * dir.x);
-        if (perp < 1.2) {
+        const p = Math.abs(dx * dir.z - dz * dir.x);
+        if (p < perp) {
           hit = { kind: 'barrel', obj: b, dist: along };
           hitDist = along;
         }
@@ -1171,8 +1484,8 @@ export function createGame(canvas, seed) {
         const dz = p.group.position.z - origin.z;
         const along = dx * dir.x + dz * dir.z;
         if (along < 0 || along > hitDist) continue;
-        const perp = Math.abs(dx * dir.z - dz * dir.x);
-        if (perp < 1.2) {
+        const pp = Math.abs(dx * dir.z - dz * dir.x);
+        if (pp < perp) {
           hit = { kind: 'ped', obj: p, dist: along };
           hitDist = along;
         }
@@ -1184,7 +1497,7 @@ export function createGame(canvas, seed) {
       end.y = 1.2;
       burst(end.x, 1.2, end.z, 8);
       if (hit.kind === 'enemy') {
-        hurtEnemy(hit.obj, cfg.player.shootDamage);
+        hurtEnemy(hit.obj, damage);
       } else if (hit.kind === 'barrel') {
         explodeBarrel(hit.obj);
       } else {
@@ -1209,10 +1522,40 @@ export function createGame(canvas, seed) {
     if (!state.shotMode) setTimeout(() => { muzzle.visible = false; }, 60);
     audio.gunshot();
     addHeat(wanted, cfg.police.shootHeat);
+    // Any gunshot scares the crowd — the threat is the shot itself, not
+    // the weapon that fired it.
+    state.lastShotAt = state.time;
     for (const p of pedestrians) {
       updatePedestrian(p, 0, cfg, { x: origin.x, z: origin.z });
     }
     ensurePolice(wanted, scene, playerPos(), rng, { heading: state.camYaw, roadLines: city.roadLines });
+  }
+
+  function shoot() {
+    // Weapon dispatch: the knife swings in front, the bazooka launches a
+    // rocket. In a car the knife falls back to the pistol (no room to
+    // swing); the bazooka fires from the car.
+    if (!player.inCar && player.weapon === 1) { knifeSwing(); return; }
+    if (player.weapon === 2) { fireRocket(); return; }
+    // v9 iteration 4: limited ammo. Each gun draws from its own
+    // magazine; empty means a trip to Ammu-Nation, not an infinite gun.
+    const guns = {
+      0: { damage: cfg.player.shootDamage, cooldown: cfg.player.shootCooldown, range: cfg.player.shootRange, perp: 1.2, ammo: () => player.ammo, spend: () => { player.ammo -= 1; } },
+      3: { damage: cfg.weapons.smg.damage, cooldown: cfg.weapons.smg.cooldown, range: cfg.weapons.smg.range, perp: cfg.weapons.smg.perp, ammo: () => player.smgAmmo, spend: () => { player.smgAmmo -= 1; } },
+      4: { damage: cfg.weapons.shotgun.damage, cooldown: cfg.weapons.shotgun.cooldown, range: cfg.weapons.shotgun.range, perp: cfg.weapons.shotgun.perp, ammo: () => player.shotgunAmmo, spend: () => { player.shotgunAmmo -= 1; } },
+      5: { damage: cfg.weapons.rifle.damage, cooldown: cfg.weapons.rifle.cooldown, range: cfg.weapons.rifle.range, perp: cfg.weapons.rifle.perp, ammo: () => player.rifleAmmo, spend: () => { player.rifleAmmo -= 1; } },
+    };
+    const gun = guns[player.weapon] || guns[0];
+    if (player.shootCooldown > 0) return;
+    if (gun.ammo() <= 0) {
+      hud.showMessage('Out of ammo — buy more at Ammu-Nation', 2);
+      audio.click();
+      player.shootCooldown = 0.3;
+      return;
+    }
+    gun.spend();
+    player.shootCooldown = gun.cooldown;
+    fireHitscan(gun.damage, gun.range, gun.perp);
   }
 
   function showJobComplete(def, reward, elapsed, maxStars) {
@@ -1242,7 +1585,7 @@ export function createGame(canvas, seed) {
     document.getElementById('screen-job').style.display = 'none';
     state.screen = SCREEN_PLAY;
     if (missions.index < MISSION_DEFS.length) {
-      startMission(missions, missions.index, cfg);
+      tryStartMission(missions.index);
       if (missions.index === 3) setStars(wanted, 3);
       if (missions.index === 4) spawnMissionEnemies();
       hud.showMessage(missions.message, 7);
@@ -1285,6 +1628,9 @@ export function createGame(canvas, seed) {
     // Bazooka restock on respawn (v9 iteration 3): waking up at the
     // hospital refills the rockets to the full 8.
     player.rockets = cfg.weapons.bazooka.rockets;
+    // v9 iteration 4: the hospital refills the pistol too — a dead man
+    // walks out with a full magazine, not an empty gun.
+    player.ammo = cfg.player.pistolAmmo;
     player.dead = false;
     player.cash = Math.max(0, player.cash - cfg.player.respawnCost);
     clearPolice(wanted, scene);
@@ -1306,7 +1652,7 @@ export function createGame(canvas, seed) {
     missions.stage = 0;
     missions.timer = 0;
     if (missions.index < MISSION_DEFS.length) {
-      startMission(missions, missions.index, cfg);
+      tryStartMission(missions.index);
       if (missions.index === 3) setStars(wanted, 3);
       if (missions.index === 4) spawnMissionEnemies();
     }
@@ -1329,8 +1675,21 @@ export function createGame(canvas, seed) {
         health: Math.round(player.health),
         armour: Math.round(player.armour),
         packages: packages.takenIndices(),
+        // v9 iteration 4: ammo, owned weapons and free-roam REP are part
+        // of the save now — a reloaded game keeps its magazines, its
+        // SMG, and its race/stunt REP.
+        ammo: player.ammo,
+        rockets: player.rockets,
+        smgAmmo: player.smgAmmo,
+        shotgunAmmo: player.shotgunAmmo,
+        rifleAmmo: player.rifleAmmo,
+        owned: player.owned,
+        repBonus: player.repBonus,
+        racesWon: racesWon,
+        stunts: stunts,
       };
       window.localStorage.setItem(cfg.saveKey, JSON.stringify(data));
+      hud.showAutosave('SAVED');
     } catch {
       // Storage can be off: the save then lasts this visit only.
     }
@@ -1357,6 +1716,17 @@ export function createGame(canvas, seed) {
     state.camYaw = player.heading;
     missions.index = Math.min(data.missionIndex ?? 0, MISSION_DEFS.length - 1);
     if (Array.isArray(data.packages)) packages.restore(data.packages);
+    // v9 iteration 4: magazines, owned weapons and free-roam REP. Old
+    // saves (before these fields existed) fall back to the defaults.
+    player.ammo = data.ammo ?? cfg.player.pistolAmmo;
+    player.rockets = data.rockets ?? cfg.weapons.bazooka.rockets;
+    player.smgAmmo = data.smgAmmo ?? 0;
+    player.shotgunAmmo = data.shotgunAmmo ?? 0;
+    player.rifleAmmo = data.rifleAmmo ?? 0;
+    player.owned = data.owned ?? { smg: false, shotgun: false, rifle: false };
+    player.repBonus = data.repBonus ?? 0;
+    racesWon = data.racesWon ?? 0;
+    stunts = data.stunts ?? 0;
   }
 
   // One line of save summary for the title screen's Continue button, so
@@ -1365,8 +1735,25 @@ export function createGame(canvas, seed) {
     if (!data) return '';
     const def = MISSION_DEFS[Math.min(data.missionIndex ?? 0, MISSION_DEFS.length - 1)];
     const rep = (data.missionIndex ?? 0) * cfg.player.repPerJob
-      + (Array.isArray(data.packages) ? data.packages.length : 0) * cfg.player.repPerPackage;
+      + (Array.isArray(data.packages) ? data.packages.length : 0) * cfg.player.repPerPackage
+      + (data.repBonus ?? 0);
     return `CH.${def.id} ${def.title.toUpperCase()} · $${Math.round(data.cash ?? 150)} · REP ${rep} · DAY ${data.day ?? 1}`;
+  }
+
+  // v9 iteration 4: mission 6 (The Big Score, index 5) needs REP 30.
+  // A gated start leaves the mission idle and sets the repGate flag, so
+  // the HUD objective says what is missing; the gate clears itself the
+  // moment the REP is earned (checked every step after the mission
+  // update).
+  function tryStartMission(idx) {
+    if (idx === 5 && repPoints() < 30) {
+      missions.state = 'idle';
+      missions.repGate = true;
+      hud.showMessage('The Big Score needs REP 30 — run street races and stunts to earn it.', 5);
+      return;
+    }
+    missions.repGate = false;
+    startMission(missions, idx, cfg);
   }
 
   function startGame(fromSave) {
@@ -1396,52 +1783,87 @@ export function createGame(canvas, seed) {
     playerMesh.position.y = 0;
     state.screen = SCREEN_PLAY;
     audio.unlock();
-    startMission(missions, missions.index, cfg);
+    tryStartMission(missions.index);
     if (missions.index === 3) setStars(wanted, 3);
     if (missions.index === 4) spawnMissionEnemies();
     hud.showMessage(missions.message, 7);
     saveGame();
   }
 
+  // Continuous day cycle (v9 iteration 4): the light interpolates
+  // keyframes by the clock hour — night, dawn, day, dusk, night — so the
+  // sky dome, sun, hemisphere light and fog density all move with the
+  // HUD clock. The dusk plateau (17.5-19.5) holds the old golden-hour
+  // look EXACTLY (sun 1.6, hemi 0.48, ambient 0.5, lamps 12, dusk sky
+  // palette), so staged shots still render the same dusk.
   function updateDaylight() {
     const night = cfg.night;
-    if (state.nightMode) {
-      // Neon night: a dark sky, a moon-cold sun, the lamps all the way up.
-      // The lit windows read brighter by contrast; the beacon, the heli
-      // spot and the fountain keep their own glow.
+    const h = state.clockHour;
+    // Keyframes: [hour, sun, hemi, ambient, lamps, fogDensity, sky set].
+    // 'dusk' is the v8 palette; 'day' and 'night' are their own sets.
+    const keys = [
+      { h: 0, sun: 0.35, hemi: 0.25, amb: 0.25, lamps: 18, fogD: 0.0035, set: 'night' },
+      { h: 5, sun: 0.35, hemi: 0.25, amb: 0.25, lamps: 18, fogD: 0.0035, set: 'night' },
+      { h: 7, sun: 1.2, hemi: 0.5, amb: 0.45, lamps: 8, fogD: 0.0022, set: 'dusk' },
+      { h: 9, sun: 2.4, hemi: 0.75, amb: 0.6, lamps: 2, fogD: 0.0014, set: 'day' },
+      { h: 16, sun: 2.4, hemi: 0.75, amb: 0.6, lamps: 2, fogD: 0.0014, set: 'day' },
+      { h: 17.5, sun: 1.6, hemi: 0.48, amb: 0.5, lamps: 12, fogD: 0.0022, set: 'dusk' },
+      { h: 19.5, sun: 1.6, hemi: 0.48, amb: 0.5, lamps: 12, fogD: 0.0022, set: 'dusk' },
+      { h: 21, sun: 0.35, hemi: 0.25, amb: 0.25, lamps: 18, fogD: 0.0035, set: 'night' },
+      { h: 24, sun: 0.35, hemi: 0.25, amb: 0.25, lamps: 18, fogD: 0.0035, set: 'night' },
+    ];
+    let a = keys[0];
+    let b = keys[keys.length - 1];
+    for (let i = 0; i < keys.length - 1; i += 1) {
+      if (h >= keys[i].h && h <= keys[i + 1].h) { a = keys[i]; b = keys[i + 1]; break; }
+    }
+    const span = Math.max(0.0001, b.h - a.h);
+    const t = clamp((h - a.h) / span, 0, 1);
+    const lerp = (x, y) => x + (y - x) * t;
+    const sunI = lerp(a.sun, b.sun);
+    const hemiI = lerp(a.hemi, b.hemi);
+    const ambI = lerp(a.amb, b.amb);
+    const lampI = lerp(a.lamps, b.lamps);
+    const fogD = lerp(a.fogD, b.fogD);
+    // Sky palette: pick by the nearer keyframe's set (the plateau keys
+    // share 'dusk', so the dusk frame is exact, not a blend).
+    const set = t < 0.5 ? a.set : b.set;
+    if (set === 'night') {
       scene.background = new THREE.Color(night.fog);
       scene.fog.color.setHex(night.fog);
       skyDome.material.uniforms.top.value.setHex(night.skyTop);
       skyDome.material.uniforms.mid.value.setHex(night.skyMid);
       skyDome.material.uniforms.low.value.setHex(night.skyLow);
-      sun.intensity = night.sunIntensity;
       sun.color.setHex(night.sun);
       sun.position.set(60, 120, 60);
-      hemi.intensity = night.hemiIntensity;
-      ambient.intensity = night.ambientIntensity;
-      for (const l of city.streetlights) l.intensity = night.streetlight;
-      return;
+    } else if (set === 'day') {
+      scene.background = new THREE.Color(cfg.palette.skyDay);
+      scene.fog.color.setHex(cfg.palette.fog);
+      skyDome.material.uniforms.top.value.setHex(0x3a7bd5);
+      skyDome.material.uniforms.mid.value.setHex(0x7ab5e8);
+      skyDome.material.uniforms.low.value.setHex(0xcfe8f5);
+      sun.color.setHex(0xfff2d8);
+      sun.position.set(60, 180, 60);
+    } else {
+      scene.background = new THREE.Color(cfg.palette.skyDusk);
+      scene.fog.color.setHex(cfg.palette.fog);
+      skyDome.material.uniforms.top.value.setHex(cfg.palette.skyTop);
+      skyDome.material.uniforms.mid.value.setHex(cfg.palette.skyMid);
+      skyDome.material.uniforms.low.value.setHex(cfg.palette.skyLow);
+      sun.color.setHex(0xffb27a);
+      sun.position.set(70, 67, 60);
     }
-    const h = state.clockHour;
-    // Golden hour is the whole look: the dusk factor never drops below
-    // 0.75, so the sun stays low, the shadows stay long, and the street
-    // lamps stay lit no matter how long the session runs.
-    const dusk = Math.max(0.75, clamp((h - 16) / 3, 0, 1));
-    const day = new THREE.Color(cfg.palette.skyDay);
-    const duskCol = new THREE.Color(cfg.palette.skyDusk);
-    day.lerp(duskCol, dusk * 0.85);
-    scene.background = day;
-    scene.fog.color.setHex(cfg.palette.fog);
-    skyDome.material.uniforms.top.value.setHex(cfg.palette.skyTop);
-    skyDome.material.uniforms.mid.value.setHex(cfg.palette.skyMid);
-    skyDome.material.uniforms.low.value.setHex(cfg.palette.skyLow);
-    sun.intensity = 2.2 - dusk * 0.7;
-    sun.position.set(120 - dusk * 60, 180 - dusk * 135, 60);
-    sun.color.setHex(0xffb27a);
-    hemi.intensity = 0.6 - dusk * 0.15;
-    ambient.intensity = 0.5;
-    // The beachfront lamps glow with the dusk.
-    for (const l of city.streetlights) l.intensity = 4 + dusk * 10;
+    sun.intensity = sunI;
+    hemi.intensity = hemiI;
+    ambient.intensity = ambI;
+    scene.fog.density = fogD;
+    // The beachfront lamps glow with the dark.
+    for (const l of city.streetlights) l.intensity = lampI;
+    // The sea shader follows the sun (glint direction + colour).
+    if (city.updateSea) {
+      const sunDir = sun.position.clone().normalize();
+      city.updateSea(state.time, sunDir, sun.color);
+    }
   }
 
   // The police heli: skyline decoration at low heat, a real pursuit system
@@ -1453,9 +1875,14 @@ export function createGame(canvas, seed) {
     const pp = playerPos();
     city.heli.userData.rotor.rotation.y += dt * 18;
     if (wanted.heliActive) {
+      // v9 iteration 4: at 5 stars (MAXIMUM) the heli stops orbiting and
+      // hovers directly over the player — the spotlight TRACKS them, and
+      // the heat does not cool while the beam is on them. At 4 stars it
+      // still orbits at 22 m, as before.
+      const tracking = wanted.stars >= cfg.police.spotlightStars;
       const a = state.time * 0.12;
-      const tx = pp.x + Math.cos(a) * 22;
-      const tz = pp.z + Math.sin(a) * 22;
+      const tx = tracking ? pp.x : pp.x + Math.cos(a) * 22;
+      const tz = tracking ? pp.z : pp.z + Math.sin(a) * 22;
       const ty = cfg.police.heliHeight;
       const hx = city.heli.position.x + (tx - city.heli.position.x) * Math.min(1, dt * 1.2);
       const hz = city.heli.position.z + (tz - city.heli.position.z) * Math.min(1, dt * 1.2);
@@ -1490,15 +1917,19 @@ export function createGame(canvas, seed) {
   function updateLightHeads() {
     const ns = lightFor('z');
     const ew = lightFor('x');
-    const on = { red: 0xff2222, yellow: 0xffd23e, green: 0x22ff44 };
-    const off = { red: 0x661111, yellow: 0x554411, green: 0x114422 };
+    // v9 iteration 4: the lit lamp is HDR (> 1) so it blooms — the bloom
+    // threshold is 0.9 and a plain 0xff2222 would not clear it. The off
+    // lamp of each pair stays dim.
+    const on = { red: [2.0, 0.25, 0.25], yellow: [2.0, 1.7, 0.4], green: [0.3, 2.0, 0.5] };
+    const off = { red: [0.4, 0.07, 0.07], yellow: [0.33, 0.27, 0.07], green: [0.07, 0.27, 0.13] };
+    const set = (mat, rgb) => mat.color.setRGB(rgb[0], rgb[1], rgb[2]);
     for (const head of city.lightHeads) {
-      head.mats.ns.red.color.setHex(ns === 'red' ? on.red : off.red);
-      head.mats.ns.yellow.color.setHex(ns === 'yellow' ? on.yellow : off.yellow);
-      head.mats.ns.green.color.setHex(ns === 'green' ? on.green : off.green);
-      head.mats.ew.red.color.setHex(ew === 'red' ? on.red : off.red);
-      head.mats.ew.yellow.color.setHex(ew === 'yellow' ? on.yellow : off.yellow);
-      head.mats.ew.green.color.setHex(ew === 'green' ? on.green : off.green);
+      set(head.mats.ns.red, ns === 'red' ? on.red : off.red);
+      set(head.mats.ns.yellow, ns === 'yellow' ? on.yellow : off.yellow);
+      set(head.mats.ns.green, ns === 'green' ? on.green : off.green);
+      set(head.mats.ew.red, ew === 'red' ? on.red : off.red);
+      set(head.mats.ew.yellow, ew === 'yellow' ? on.yellow : off.yellow);
+      set(head.mats.ew.green, ew === 'green' ? on.green : off.green);
     }
   }
 
@@ -1509,6 +1940,7 @@ export function createGame(canvas, seed) {
     const target = currentTarget(missions);
     const pp = playerPos();
     let objective = missionObjectiveText(missions);
+    if (state.race) objective = `STREET RACE — checkpoint ${state.race.cp}/3 · ${Math.ceil(state.race.timeLeft)}s left`;
     if (missions.timer > 0) objective += `  ⏱ ${Math.ceil(missions.timer)}s`;
     if (!def) objective = 'All jobs done — Costa Fuego is yours.';
     // The dialogue bar shows the live conversation line, not the briefing:
@@ -1537,13 +1969,28 @@ export function createGame(canvas, seed) {
       dialogueSpeaker: line ? line.who.toUpperCase() : '',
       dialogueText: line ? line.text : '',
       radio: audio.stationName(),
-      crosshair: !player.inCar && state.screen === SCREEN_PLAY,
+      // v9 iteration 4: the crosshair shows on foot as before — and in a
+      // car while the player is aiming (drive-by).
+      crosshair: state.screen === SCREEN_PLAY && (!player.inCar || input.aiming()),
       pursuers: wanted.stars > 0 ? pursuers(wanted, pp) : [],
       spotlight: wanted.heliOverhead,
+      // v9 iteration 4: standing in a police vision cone (the HUD warns
+      // "SPOTLIGHT ON YOU — BREAK LINE OF SIGHT").
+      inVisionCone: wanted.stars > 0 && inVisionCone(pp.x, pp.z),
       packages: packages.count(),
       packagesTotal: cfg.packages.count,
       weapon: player.weapon,
       rockets: player.rockets,
+      // v9 iteration 4: ammo counts + owned shop weapons for the HUD
+      // weapon slots (4 SMG, 5 shotgun, 6 rifle show their ammo or the
+      // REP lock).
+      ammo: player.ammo,
+      smgAmmo: player.smgAmmo,
+      shotgunAmmo: player.shotgunAmmo,
+      rifleAmmo: player.rifleAmmo,
+      owned: player.owned,
+      racesWon,
+      stunts,
       // Two seasons (v9 iteration 3): odd days rain, even days dry.
       season: state.day % 2 === 1 ? 'MUSIM HUJAN' : 'MUSIM KEMARAU',
     };
@@ -1572,8 +2019,16 @@ export function createGame(canvas, seed) {
     state.camFocus.z += (target.z - state.camFocus.z) * k;
     const fx = state.camFocus.x;
     const fz = state.camFocus.z;
-    const dist = player.inCar ? cfg.camera.carDistance : cfg.camera.footDistance;
-    const height = player.inCar ? cfg.camera.carHeight : cfg.camera.footHeight;
+    // v9 iteration 4: ADS — right mouse held zooms the camera in (0.55×
+    // distance), over-the-shoulder. The drag fallback keeps the same path.
+    const aimK = input.aiming() ? 0.55 : 1;
+    // Smooth camera lerp on enter/exit (v9 iteration 4): camBlend ramps
+    // 0→1 after a transition; while it is below 1 the distance and height
+    // interpolate between the foot and car values instead of snapping.
+    state.camBlend = Math.min(1, state.camBlend + dt * 2.5);
+    const blendK = player.inCar ? state.camBlend : 1 - state.camBlend;
+    const dist = (cfg.camera.footDistance + (cfg.camera.carDistance - cfg.camera.footDistance) * blendK) * aimK;
+    const height = cfg.camera.footHeight + (cfg.camera.carHeight - cfg.camera.footHeight) * blendK;
     // Pitch drag was stored but never applied: it raises/lowers the camera
     // around the neutral pitch, so the default view is unchanged.
     const ty = height + Math.sin(state.camPitch - CAM_PITCH_NEUTRAL) * dist * 0.6;
@@ -1604,16 +2059,22 @@ export function createGame(canvas, seed) {
     updateLights(dt);
     updateRain(dt);
 
-    // Camera drag.
+    // Camera: Pointer Lock deltas when locked, mouse drag as the
+    // fallback. v9 iteration 4: the lock path is the primary one (left
+    // click locks); the drag path stays for headless probes and lock
+    // failures. Any camera input marks the aim time (drive-by override).
+    const locked = input.takePointer();
     const drag = input.takeDrag();
-    state.camYaw -= drag.x * cfg.camera.lookSpeed;
-    state.camPitch = clamp(state.camPitch + drag.y * 0.002, cfg.camera.pitchMin, cfg.camera.pitchMax);
+    const look = { x: locked.x + drag.x, y: locked.y + drag.y };
+    state.camYaw -= look.x * cfg.camera.lookSpeed;
+    state.camPitch = clamp(state.camPitch + look.y * 0.002, cfg.camera.pitchMin, cfg.camera.pitchMax);
+    if (look.x !== 0 || look.y !== 0) state.lastAimTime = state.time;
 
     const actions = takePendingActions();
     if (actions & ACTION_RESTART) {
       if (missions.state !== 'idle' || missions.index < MISSION_DEFS.length) {
         failMission(missions);
-        startMission(missions, missions.index, cfg);
+        tryStartMission(missions.index);
         hud.showMessage(`Restarted: ${currentMission(missions).title}`, 4);
       }
     }
@@ -1623,8 +2084,15 @@ export function createGame(canvas, seed) {
     if (actions & ACTION_ENTER) {
       if (player.inCar) exitCar();
       else {
-        const car = nearestCar(cfg.player.enterCarRange);
-        if (car) enterCar(car);
+        // v9 iteration 4: E opens a shop when on foot near its door —
+        // the car check runs second, so a parked car by the shop never
+        // blocks the door.
+        const shop = nearShop();
+        if (shop) openShop(shop);
+        else {
+          const car = nearestCar(cfg.player.enterCarRange);
+          if (car) enterCar(car);
+        }
       }
     }
     if (actions & ACTION_SHOOT) shoot();
@@ -1633,6 +2101,20 @@ export function createGame(canvas, seed) {
     if (actions & ACTION_WEAPON_1) { player.weapon = 0; audio.click(); updateWeaponModels(); }
     if (actions & ACTION_WEAPON_2) { player.weapon = 1; audio.click(); updateWeaponModels(); }
     if (actions & ACTION_WEAPON_3) { player.weapon = 2; audio.click(); updateWeaponModels(); }
+    // v9 iteration 4: 4 SMG, 5 shotgun, 6 rifle — shop weapons, and the
+    // key does nothing until the weapon is owned (the HUD slot says so).
+    if (actions & ACTION_WEAPON_4) {
+      if (player.owned.smg) { player.weapon = 3; audio.click(); updateWeaponModels(); }
+      else hud.showMessage('SMG locked — buy it at Ammu-Nation (REP 20).', 2);
+    }
+    if (actions & ACTION_WEAPON_5) {
+      if (player.owned.shotgun) { player.weapon = 4; audio.click(); updateWeaponModels(); }
+      else hud.showMessage('Shotgun locked — buy it at Ammu-Nation (REP 40).', 2);
+    }
+    if (actions & ACTION_WEAPON_6) {
+      if (player.owned.rifle) { player.weapon = 5; audio.click(); updateWeaponModels(); }
+      else hud.showMessage('Rifle locked — buy it at Ammu-Nation (REP 60).', 2);
+    }
 
     const p = playerPos();
     if (player.inCar && player.car) {
@@ -1649,15 +2131,28 @@ export function createGame(canvas, seed) {
         if (Math.abs(car.speed) < 0.3) car.speed = 0;
       }
       if (input.brake()) {
-        car.speed -= Math.sign(car.speed) * cfg.car.brake * dt;
+        // v9 iteration 4: Space is the handbrake now — half the brake
+        // rate, but the car turns harder while it is held (drift): the
+        // rear lateral grip drops, the yaw rate rises, and the body rolls
+        // further. S still reverses (the fwd < 0 branch above); Space
+        // never reverses.
+        car.speed -= Math.sign(car.speed) * cfg.car.brake * 0.5 * dt;
         if (Math.abs(car.speed) < 0.5) car.speed = 0;
       }
       car.speed = clamp(car.speed, -cfg.car.maxReverse, top);
       if (!Number.isFinite(car.speed)) car.speed = 0;
       const prevX = car.group.position.x;
       const prevZ = car.group.position.z;
-      car.heading += steer * cfg.car.steer * dt * clamp(Math.abs(car.speed) / 8, 0, 1) * Math.sign(car.speed || 1);
+      const drifting = input.brake();
+      car.heading += steer * cfg.car.steer * dt * clamp(Math.abs(car.speed) / 8, 0, 1) * Math.sign(car.speed || 1) * (drifting ? 1.9 : 1);
       car.group.rotation.y = car.heading;
+      // Body roll on cornering (more while drifting) + pitch on
+      // accel/brake: the car leans into the turn and squats/dips with
+      // the throttle. Eased, so the body settles instead of snapping.
+      const rollTarget = -steer * clamp(Math.abs(car.speed) / 20, 0, 1) * 0.07 * (drifting ? 1.8 : 1);
+      const pitchTarget = fwd > 0 ? -0.03 : fwd < 0 ? 0.045 : 0;
+      car.group.rotation.z += (rollTarget - car.group.rotation.z) * Math.min(1, dt * 8);
+      car.group.rotation.x += (pitchTarget - car.group.rotation.x) * Math.min(1, dt * 8);
       car.group.position.x += Math.sin(car.heading) * car.speed * dt;
       car.group.position.z += Math.cos(car.heading) * car.speed * dt;
       if (!isOnRoad(car.group.position.x, car.group.position.z)) {
@@ -1669,21 +2164,84 @@ export function createGame(canvas, seed) {
       spinWheels(car);
       steerWheels(car, steer * 0.35);
       // Very slow trail: the camera holds its angle while the car turns
-      // instead of swinging around with every steering input.
-      state.camYaw = lerpAngle(state.camYaw, car.heading, Math.min(1, dt * 0.5));
+      // instead of swinging around with every steering input. v9
+      // iteration 4: while the player is actively aiming (drive-by),
+      // the trail pauses — the camera stays where the player aimed it.
+      // The trail rate scales with speed, so a fast car recentres the
+      // camera sooner.
+      const aimingRecently = state.time - state.lastAimTime < 1.5;
+      if (!aimingRecently) {
+        const trailRate = 0.5 + (Math.abs(car.speed) / cfg.car.maxSpeed) * 1.5;
+        state.camYaw = lerpAngle(state.camYaw, car.heading, Math.min(1, dt * trailRate));
+      }
       if (input.brake() && Math.abs(car.speed) > 6) {
         skids.add(car.group.position.x - Math.sin(car.heading) * 1.5, car.group.position.z - Math.cos(car.heading) * 1.5, car.heading);
       }
       // Tire smoke on handbrake, or on a hard steer at speed (a drift):
       // one puff per rear wheel per step, rising and fading.
-      const drifting = Math.abs(steer) > 0 && Math.abs(car.speed) > 20;
-      if ((input.brake() && Math.abs(car.speed) > 6) || drifting) {
+      const hardSteer = Math.abs(steer) > 0 && Math.abs(car.speed) > 20;
+      if ((input.brake() && Math.abs(car.speed) > 6) || hardSteer) {
         const bx = car.group.position.x - Math.sin(car.heading) * 1.5;
         const bz = car.group.position.z - Math.cos(car.heading) * 1.5;
         const rx = Math.cos(car.heading);
         const rz = -Math.sin(car.heading);
         puffSmoke(bx + rx * 0.8, 0.4, bz + rz * 0.8);
         puffSmoke(bx - rx * 0.8, 0.4, bz - rz * 0.8);
+      }
+      // Brake lights: the taillights brighten while braking (HDR, so
+      // they bloom) and dim again when the foot comes off.
+      if (car.tailMat) {
+        const braking = input.brake() || fwd < 0;
+        car.tailMat.color.setRGB(braking ? 2.6 : 1.8, braking ? 0.3 : 0.25, braking ? 0.25 : 0.2);
+      }
+      // Destructible props (v9 iteration 4): drive through a lamp post,
+      // a hydrant, a trash can, a fence or a cafe table above 4 m/s and
+      // it tips over. A hydrant sprays water for 2 s. Broken props
+      // respawn after 6 s — the pool recycles, nothing is allocated.
+      for (const d of city.destructibles) {
+        if (d.broken) continue;
+        const dd = Math.hypot(d.home.x - car.group.position.x, d.home.z - car.group.position.z);
+        if (dd < 2.2 && Math.abs(car.speed) > 4) {
+          d.broken = true;
+          d.timer = 6;
+          d.fallT = 0;
+          d.sprayT = d.kind === 'hydrant' ? 2 : 0;
+          if (d.kind === 'hydrant') burstWater(d.home.x, 1.2, d.home.z, 10);
+          audio.crash();
+          state.shake = Math.max(state.shake, 0.4);
+          car.speed *= 0.85;
+        }
+      }
+      // Stunt ramps (v9 iteration 4): hit one over 15 m/s and the car
+      // flies. Air time over 0.6 s on landing pays $100 + 1 REP, with a
+      // brief slow-mo while airborne.
+      for (const r of city.ramps) {
+        const rd = Math.hypot(r.x - car.group.position.x, r.z - car.group.position.z);
+        if (rd < 3.5 && Math.abs(car.speed) > 15 && state.carAir === 0) {
+          state.carAir = 6 + Math.abs(car.speed) * 0.18;
+          state.slowmo = 0.6;
+          state.airStart = state.time;
+          audio.pickup();
+        }
+      }
+      // Airborne physics: gravity pulls the car back down; landing
+      // settles it exactly at y = 0.
+      if (state.carAir !== 0) {
+        state.carAir -= 18 * dt;
+        car.group.position.y += state.carAir * dt;
+        if (car.group.position.y <= 0) {
+          car.group.position.y = 0;
+          const airtime = state.time - (state.airStart || 0);
+          if (airtime > 0.6) {
+            stunts += 1;
+            player.repBonus += cfg.player.repPerStunt;
+            player.cash += cfg.stunts.prize;
+            hud.showMessage(`Stunt jump! +$${cfg.stunts.prize} · +${cfg.player.repPerStunt} REP`, 4);
+            audio.missionDone();
+            saveGame();
+          }
+          state.carAir = 0;
+        }
       }
       // Running over pedestrians and ramming traffic.
       for (let i = pedestrians.length - 1; i >= 0; i -= 1) {
@@ -1709,7 +2267,7 @@ export function createGame(canvas, seed) {
           damageCar(car, 8);
         }
       }
-      audio.setEngine(Math.abs(car.speed) / cfg.car.maxSpeed, true);
+      audio.setEngine(Math.abs(car.speed) / cfg.car.maxSpeed, true, input.run());
       // Respray at Taller Marla: drive into the garage while wanted and
       // the car comes out a new colour with the heat gone — $150.
       const garage = city.landmarks.garage;
@@ -1814,22 +2372,84 @@ export function createGame(canvas, seed) {
       saveGame();
     }
 
+    // Street race (v9 iteration 4): drive through the start line on the
+    // garage road and the clock starts — two checkpoints, then the
+    // finish, 75 s, $300 + 5 REP. The rings show the way; the HUD
+    // objective shows the clock.
+    if (player.inCar && player.car) {
+      const cp = player.car.group.position;
+      const targets = [cfg.race.start, ...cfg.race.checkpoints, cfg.race.finish];
+      const startDist = Math.hypot(cp.x - cfg.race.start.x, cp.z - cfg.race.start.z);
+      if (!state.race) {
+        // Re-arm the start line once the car has driven clear of it.
+        if (startDist > 8) state.raceArmed = true;
+        if (state.raceArmed && startDist < 6) {
+          state.race = { cp: 1, timeLeft: cfg.race.timeLimit };
+          raceRings.forEach((r, i) => {
+            r.visible = true;
+            r.material.color.setHex(i === 0 ? 0x22ff44 : i === 1 ? 0xffd23e : 0x555555);
+          });
+          hud.showMessage('Street race! Hit the gold rings — 75 s, $300 + 5 REP.', 4);
+          audio.pickup();
+        }
+      } else {
+        state.race.timeLeft -= dt;
+        const tgt = targets[state.race.cp];
+        if (tgt && Math.hypot(cp.x - tgt.x, cp.z - tgt.z) < 6) {
+          state.race.cp += 1;
+          raceRings.forEach((r, i) => {
+            r.material.color.setHex(i === state.race.cp ? 0xffd23e : i < state.race.cp ? 0x22ff44 : 0x555555);
+          });
+          if (state.race.cp >= targets.length) {
+            racesWon += 1;
+            player.repBonus += cfg.player.repPerRace;
+            player.cash += cfg.race.prize;
+            hud.showMessage(`Race won! +$${cfg.race.prize} · +${cfg.player.repPerRace} REP`, 5);
+            audio.missionDone();
+            saveGame();
+            state.race = null;
+            state.raceArmed = false;
+            raceRings.forEach((r) => { r.visible = false; });
+          } else {
+            audio.pickup();
+          }
+        }
+        if (state.race && state.race.timeLeft <= 0) {
+          hud.showMessage('Race failed — out of time.', 3);
+          audio.fail();
+          state.race = null;
+          state.raceArmed = false;
+          raceRings.forEach((r) => { r.visible = false; });
+        }
+      }
+    }
+
     // Traffic, pedestrians, enemies.
     for (const car of traffic) updateTrafficCar(car, dt, allCars(), cfg, pedestrians);
-    // Gunfire and a speeding car both scatter the crowd; pedestrians stay
-    // on the sidewalks unless they are fleeing.
-    const gunshot = player.shootCooldown > cfg.player.shootCooldown - 0.1 ? playerPos() : null;
-    const threat = gunshot
-      || (player.inCar && player.car && Math.abs(player.car.speed) > 8 ? playerPos() : null);
-    for (const ped of pedestrians) updatePedestrian(ped, dt, cfg, threat, isOnRoad);
+    // Gunfire scatters the crowd; pedestrians stay on the sidewalks
+    // unless they are fleeing. v9 iteration 4: the threat is any gunshot
+    // in the last half second (any weapon — the old check only caught the
+    // pistol's cooldown edge). A speeding car does NOT panic the crowd —
+    // it makes the peds in its path DODGE (people.js). Panicking on a
+    // fast car made the dodge dead code: any car fast enough to dodge
+    // (>4 m/s) was also fast enough to panic (>8 m/s) inside the 18 m
+    // threat radius, so a ped never dodged — it always panicked first.
+    const threat = state.time - state.lastShotAt < 0.5 ? playerPos() : null;
+    for (const ped of pedestrians) updatePedestrian(ped, dt, cfg, threat, isOnRoad, allCars());
     const pp = playerPos();
+    // v9 iteration 4: the Reef Kings faction. Entering the docks rect,
+    // or hurting a King, makes the whole faction aggro — faster,
+    // further, more accurate. NPC gunfire is a positional sound at the
+    // shooter's position.
+    if (pp.x > 120 && pp.z > 90) state.factionAggro = true;
     for (const e of enemies) {
       updateEnemy(e, dt, cfg, pp, (enemy) => {
         const from = enemy.group.position.clone().setY(1.4);
         const to = { x: pp.x, y: 1.3, z: pp.z };
         fireTracer(from, to);
+        audio.positionalShot(from.x, from.y, from.z, 'shot');
         damagePlayer(cfg.combat.enemyDamage, 'shot');
-      });
+      }, state.factionAggro);
     }
 
     // Wanted + police.
@@ -1863,8 +2483,25 @@ export function createGame(canvas, seed) {
       audio.missionDone();
     }
     prevStars = wanted.stars;
-    audio.setSiren(wanted.sirenOn, state.time);
+    // v9 iteration 4: the siren rides on the nearest cruiser (positional
+    // audio — it swells as the cops close in); the global siren is the
+    // fallback when positional audio is unavailable or no cruiser exists.
+    if (wanted.policeCars.length > 0) {
+      const nearest = wanted.policeCars.reduce((a, b) => {
+        const da = Math.hypot(a.group.position.x - pp.x, a.group.position.z - pp.z);
+        const db = Math.hypot(b.group.position.x - pp.x, b.group.position.z - pp.z);
+        return da <= db ? a : b;
+      });
+      const np = nearest.group.position;
+      if (!audio.setSirenPositional(wanted.sirenOn, np.x, 2, np.z)) audio.setSiren(wanted.sirenOn, state.time);
+    } else {
+      audio.setSiren(wanted.sirenOn, state.time);
+    }
     audio.music(dt);
+    // v9 iteration 4: the radio ducks while Marla is talking, and the
+    // police vision cones show the line of sight.
+    audio.setDucking(!!missions.currentLine);
+    updateVisionCones();
 
     // Missions.
     const aliveEnemies = enemies.filter((e) => e.alive).length;
@@ -1890,6 +2527,14 @@ export function createGame(canvas, seed) {
       hud.showMessage(missions.message, 5);
       audio.fail();
       failMission(missions);
+    }
+
+    // The REP gate clears itself the moment the REP is earned (races,
+    // stunts, packages): the Big Score auto-starts when the player
+    // crosses 30.
+    if (missions.repGate && repPoints() >= 30) {
+      tryStartMission(missions.index);
+      hud.showMessage('REP 30 reached — The Big Score is open. Marla is waiting.', 5);
     }
 
     // Beacon follows the current target.
@@ -1944,10 +2589,42 @@ export function createGame(canvas, seed) {
         if (s.life <= 0) s.mesh.visible = false;
       }
     }
+    // Destructible props: tip over, spray, respawn (v9 iteration 4).
+    for (const d of city.destructibles) {
+      if (!d.broken) continue;
+      if (d.fallT < 1) {
+        d.fallT = Math.min(1, d.fallT + dt / 0.3);
+        d.group.rotation.x = -Math.PI / 2 * d.fallT;
+      }
+      if (d.sprayT > 0) {
+        d.sprayT -= dt;
+        burstWater(d.home.x, 1.2, d.home.z, 1);
+      }
+      d.timer -= dt;
+      if (d.timer <= 0) {
+        d.broken = false;
+        d.fallT = 0;
+        d.group.rotation.x = 0;
+      }
+    }
+    // Hydrant water: arcs up, falls, fades.
+    for (const w of water) {
+      if (w.life > 0) {
+        w.life -= dt;
+        w.mesh.position.x += w.vx * dt;
+        w.mesh.position.y += w.vy * dt;
+        w.mesh.position.z += w.vz * dt;
+        w.vy -= 12 * dt;
+        w.mesh.material.opacity = Math.max(0, (w.life / 1.3) * 0.85);
+        if (w.life <= 0 || w.mesh.position.y < 0) w.mesh.visible = false;
+      }
+    }
 
     updateDaylight();
     updateHeli(dt);
     updateLightHeads();
+    // The palm leaves sway with the clock (v9 iteration 4).
+    if (city.updateWind) city.updateWind(state.time);
     // The camera is NOT updated here any more: it runs once per rendered
     // frame in frame(), after the steps (see updateCamera).
 
@@ -1969,7 +2646,14 @@ export function createGame(canvas, seed) {
     last = now;
     handleFrameActions();
     if (state.screen === SCREEN_PLAY) {
-      acc += dt;
+      // Stunt slow-mo (v9 iteration 4): while slowmo runs, physics
+      // advances at 0.45× real time — the jump hangs in the air.
+      let effDt = dt;
+      if (state.slowmo > 0) {
+        state.slowmo -= dt;
+        effDt = dt * 0.45;
+      }
+      acc += effDt;
       let steps = 0;
       while (acc >= STEP && steps < 3) {
         step(STEP);
@@ -2277,7 +2961,7 @@ export function createGame(canvas, seed) {
         enemies.push(e);
         return enemies.length;
       },
-      enemies: () => enemies.map((e) => ({ x: e.group.position.x, z: e.group.position.z, health: e.health, alive: e.alive })),
+      enemies: () => enemies.map((e) => ({ x: e.group.position.x, z: e.group.position.z, health: e.health, alive: e.alive, aggro: e.aggro })),
       rockets: () => rockets.filter((r) => r.active).map((r) => ({ x: r.mesh.position.x, y: r.mesh.position.y, z: r.mesh.position.z })),
       nearestParkedCar: () => {
         const pp = playerPos();
@@ -2320,6 +3004,158 @@ export function createGame(canvas, seed) {
       buildingCount: () => city.buildingCount,
       season: () => (state.day % 2 === 1 ? 'MUSIM HUJAN' : 'MUSIM KEMARAU'),
       rainVisible: () => rain.visible,
+      // v9 iteration 4 hooks: Pointer Lock + ADS, ammo/shops, day cycle,
+      // bloom, instancing, pooling, peds/faction, vision cones, traffic,
+      // radio, destructibles, race, saves. All read live state.
+      pointerLock: () => ({ locked: input.isLocked(), aiming: input.aiming() }),
+      ammo: () => ({
+        pistol: player.ammo, smg: player.smgAmmo, shotgun: player.shotgunAmmo,
+        rifle: player.rifleAmmo, rockets: player.rockets, cash: Math.round(player.cash),
+        owned: { ...player.owned }, rep: repPoints(),
+      }),
+      carVisual: () => {
+        const car = player.car;
+        if (!car) return null;
+        return {
+          roll: car.group.rotation.z, pitch: car.group.rotation.x,
+          tail: car.tailMat ? [car.tailMat.color.r, car.tailMat.color.g, car.tailMat.color.b] : null,
+          y: car.group.position.y, air: state.carAir,
+        };
+      },
+      dayCycle: () => ({
+        hour: state.clockHour, day: state.day,
+        sun: sun.intensity, hemi: hemi.intensity, amb: ambient.intensity,
+        fogD: scene.fog.density, lamps: city.streetlights[0] ? city.streetlights[0].intensity : 0,
+        skyTop: `#${skyDome.material.uniforms.top.value.getHexString()}`,
+      }),
+      bloom: () => ({ threshold: bloomPass.threshold, strength: bloomPass.strength }),
+      emissiveHot: () => {
+        // Count scene meshes whose material colour exceeds 1 in any
+        // channel (HDR): those are the things that clear the 0.9 bloom
+        // threshold by design — neon signs, lamp bulbs, headlights,
+        // tracers, flashes. Plain bright paint (≤ 1) does not bloom.
+        let n = 0;
+        scene.traverse((o) => {
+          if (o.isMesh && o.material && o.material.color) {
+            const c = o.material.color;
+            if (c.r > 1 || c.g > 1 || c.b > 1) n += 1;
+          }
+        });
+        return n;
+      },
+      instancedCounts: () => city.instancedCounts,
+      poolStats: () => ({
+        tracers: tracers.filter((t) => t.mesh.visible).length,
+        rockets: rockets.filter((r) => r.active).length,
+        particles: particles.filter((p) => p.life > 0).length,
+        smoke: smoke.filter((s) => s.life > 0).length,
+        skids: skids.count(),
+        water: water.filter((w) => w.life > 0).length,
+      }),
+      peds: () => pedestrians.map((p) => ({
+        x: Math.round(p.group.position.x), z: Math.round(p.group.position.z), state: p.state,
+      })),
+      traffic: () => traffic.map((c) => ({
+        x: Math.round(c.group.position.x), z: Math.round(c.group.position.z),
+        speed: Math.round(c.speed * 100) / 100, heading: Math.round(c.heading * 100) / 100,
+      })),
+      playerCar: () => {
+        const car = player.car;
+        if (!car) return null;
+        return {
+          x: car.group.position.x, z: car.group.position.z,
+          speed: car.speed, heading: car.heading,
+        };
+      },
+      placeTrafficBehind: () => {
+        // Put a traffic car 6 m behind the player car, same lane, same
+        // heading, at speed — the probe then watches it stop instead of
+        // rear-ending the player.
+        const car = player.car;
+        if (!car) return null;
+        const t = traffic[0];
+        if (!t) return null;
+        t.group.position.set(
+          car.group.position.x - Math.sin(car.heading) * 6,
+          0,
+          car.group.position.z - Math.cos(car.heading) * 6,
+        );
+        t.heading = car.heading;
+        t.group.rotation.y = car.heading;
+        t.route = { axis: Math.abs(Math.sin(car.heading)) > 0.5 ? 'x' : 'z', line: Math.abs(Math.sin(car.heading)) > 0.5 ? car.group.position.z : car.group.position.x, dir: 1 };
+        t.speed = 8;
+        return { x: t.group.position.x, z: t.group.position.z, speed: t.speed };
+      },
+      visionCones: () => visionCones.filter((c) => c.visible).length,
+      inVisionCone: () => {
+        const pp = playerPos();
+        return inVisionCone(pp.x, pp.z);
+      },
+      radio: () => ({ station: audio.stationName(), off: audio.isRadioOff(), ducking: audio.isDucking(), positional: audio.positionalCount() }),
+      shop: () => ({ kind: shopKind, screen: state.screen, near: nearShop() }),
+      destructibles: () => city.destructibles.map((d) => ({
+        kind: d.kind, x: d.home.x, z: d.home.z, broken: d.broken, timer: Math.round(d.timer * 10) / 10,
+      })),
+      factionAggro: () => state.factionAggro,
+      race: () => (state.race ? { cp: state.race.cp, timeLeft: Math.round(state.race.timeLeft * 10) / 10 } : null),
+      saveRoundTrip: (cash) => {
+        player.cash = cash;
+        saveGame();
+        const raw = window.localStorage.getItem(cfg.saveKey);
+        const data = raw ? JSON.parse(raw) : null;
+        return data ? { cash: data.cash, ammo: data.ammo, owned: data.owned, repBonus: data.repBonus } : null;
+      },
+      meshCount: () => {
+        let meshes = 0;
+        let instanced = 0;
+        scene.traverse((o) => {
+          if (o.isInstancedMesh) instanced += 1;
+          else if (o.isMesh) meshes += 1;
+        });
+        return { meshes, instanced };
+      },
+      drawCalls: () => renderer.info.render.calls,
+      camDist: () => {
+        const fx = state.camFocus ? state.camFocus.x : playerPos().x;
+        const fz = state.camFocus ? state.camFocus.z : playerPos().z;
+        return Math.hypot(camera.position.x - fx, camera.position.z - fz);
+      },
+      setCash: (v) => { player.cash = v; return Math.round(player.cash); },
+      setRepBonus: (v) => { player.repBonus = v; return repPoints(); },
+      setClockHour: (h) => { state.clockHour = h; updateDaylight(); return state.clockHour; },
+      setStars: (n) => { setStars(wanted, n); return wanted.stars; },
+      movePed: (i, x, z) => {
+        const p = pedestrians[i];
+        if (!p) return null;
+        p.group.position.set(x, 0, z);
+        return { x: p.group.position.x, z: p.group.position.z, state: p.state };
+      },
+      setCarSpeed: (v) => {
+        if (!player.car) return null;
+        player.car.speed = v;
+        return player.car.speed;
+      },
+      placeCar: (x, z, heading) => {
+        if (!player.car) return null;
+        player.car.group.position.set(x, 0, z);
+        player.car.heading = heading;
+        player.car.group.rotation.y = heading;
+        player.car.speed = 0;
+        state.camFocus = null;
+        return { x, z, heading };
+      },
+      setRaceTime: (v) => {
+        if (!state.race) return null;
+        state.race.timeLeft = v;
+        return state.race.timeLeft;
+      },
+      enterNearestCar: () => {
+        const car = nearestCar(cfg.player.enterCarRange);
+        if (!car) return null;
+        enterCar(car);
+        return { inCar: player.inCar, name: car.name };
+      },
+      setCamYawDirect: (v) => { state.camYaw = v; return state.camYaw; },
     },
     run() {
       document.getElementById('btn-start').addEventListener('click', () => {
@@ -2345,7 +3181,7 @@ export function createGame(canvas, seed) {
       document.getElementById('btn-restart-mission').addEventListener('click', () => {
         document.getElementById('screen-pause').style.display = 'none';
         failMission(missions);
-        startMission(missions, missions.index, cfg);
+        tryStartMission(missions.index);
         state.screen = SCREEN_PLAY;
       });
       document.getElementById('btn-quit').addEventListener('click', () => {

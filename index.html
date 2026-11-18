@@ -51,6 +51,13 @@
   #hud-weapon { font-size: 20px; color: #eaf4ff; }
   #hud-weapon2 { font-size: 16px; color: #9aa0aa; }
   #hud-weapon3 { font-size: 16px; color: #9aa0aa; }
+  #hud-weapon4 { font-size: 16px; color: #9aa0aa; }
+  #hud-weapon5 { font-size: 16px; color: #9aa0aa; }
+  #hud-weapon6 { font-size: 16px; color: #9aa0aa; }
+  /* Autosave indicator: a brief green SAVED under the banner. */
+  #hud-autosave { position: absolute; top: 104px; left: 50%; transform: translateX(-50%);
+    font-size: 13px; letter-spacing: 2px; color: #7dff8a; opacity: 0; transition: opacity .4s;
+    background: rgba(0,0,0,.55); padding: 2px 10px; border-radius: 4px; }
   #hud-pursuers { margin-top: 8px; font-size: 15px; line-height: 1.5; color: #ffb13e;
     background: rgba(0,0,0,.5); padding: 6px 10px; border-radius: 6px; display: none; }
   #hud-pursuers .hot { color: #ff5a4a; }
@@ -135,6 +142,14 @@
   #job-chapters .locked { color: #9aa0aa; }
   #screen-pause, #screen-over { display: none; }
   #over-title { color: #ff5a4a; }
+  /* Shop overlay (v9 iteration 4): Ammu-Nation / Pay 'n' Spray. */
+  #screen-shop { display: none; }
+  #shop-title { color: #ffd23e; }
+  #shop-items { font-size: 20px; line-height: 1.9; background: rgba(0,0,0,.55);
+    padding: 12px 26px; border-radius: 8px; margin: 8px 0; text-align: left; }
+  #shop-items .off { color: #9aa0aa; }
+  #shop-cash { font-size: 18px; color: #7dff8a; margin: 4px 0; }
+  #shop-hint { font-size: 16px; opacity: .85; margin: 6px 0 0; }
 </style>
 <script type="importmap">
 { "imports": { "three": "./vendor/three.module.min.js", "three/addons/": "./vendor/addons/" } }
@@ -156,14 +171,18 @@
   </div>
   <div id="hud-stagebar"><div id="hud-stagebar-fill"></div></div>
   <div id="hud-next"></div>
+  <div id="hud-autosave"></div>
   <div id="hud-spotlight">◉ SPOTLIGHT ON YOU — BREAK LINE OF SIGHT</div>
   <div class="hud-box" id="hud-right">
     <div id="hud-mode">FREE ROAM</div>
     <div id="hud-stars">☆☆☆☆☆</div>
     <div id="hud-cash">$150</div>
-    <div id="hud-weapon">1 · PISTOL ∞</div>
+    <div id="hud-weapon">1 · PISTOL 24</div>
     <div id="hud-weapon2">2 · KNIFE ∞</div>
     <div id="hud-weapon3">3 · BAZOOKA 8</div>
+    <div id="hud-weapon4">4 · SMG — LOCKED (REP 20)</div>
+    <div id="hud-weapon5">5 · SHOTGUN — LOCKED (REP 40)</div>
+    <div id="hud-weapon6">6 · RIFLE — LOCKED (REP 60)</div>
     <div id="hud-pursuers"></div>
   </div>
   <div class="hud-box" id="hud-message"></div>
@@ -199,10 +218,11 @@
   <p id="save-summary"></p>
   <div id="screen-controls">
     <b>CONTROLS</b><br>
-    WASD move / drive &nbsp;·&nbsp; Shift run / boost &nbsp;·&nbsp; E enter &amp; exit car<br>
-    Mouse drag camera &nbsp;·&nbsp; F or click shoot &nbsp;·&nbsp; Space jump (on foot) / brake (in car)<br>
-    1 / 2 / 3 switch weapon (pistol / knife / bazooka)<br>
-    M city map &nbsp;·&nbsp; Q radio &nbsp;·&nbsp; L neon night (dusk / night) &nbsp;·&nbsp; V spawn a car<br>
+    WASD move / drive &nbsp;·&nbsp; Shift run / boost &nbsp;·&nbsp; E enter &amp; exit car / shop<br>
+    Left click shoot (locks the mouse) &nbsp;·&nbsp; Right click aim &nbsp;·&nbsp; Mouse drag camera<br>
+    F shoot &nbsp;·&nbsp; Space jump (on foot) / handbrake-drift (in car) &nbsp;·&nbsp; S reverse<br>
+    1–6 switch weapon (pistol / knife / bazooka / SMG / shotgun / rifle)<br>
+    M city map &nbsp;·&nbsp; Q radio (5 stations + off) &nbsp;·&nbsp; L skip time +2 h &nbsp;·&nbsp; V spawn a car ($25)<br>
     P pause &nbsp;·&nbsp; N mute &nbsp;·&nbsp; R restart mission &nbsp;·&nbsp; Enter start game
   </div>
   <p style="font-size:16px; opacity:.85">Six jobs for Marla Quinn. Steal cars, lose the cops, rob the bank — and get out clean.<br>
@@ -224,6 +244,13 @@
   <div id="map-job"></div>
   <canvas id="bigmap" width="640" height="640"></canvas>
   <p id="map-hint">M or Esc to close &nbsp;·&nbsp; the gold line is your GPS route &nbsp;·&nbsp; leave the red circle to lose the cops</p>
+</div>
+
+<div class="overlay" id="screen-shop">
+  <h1 id="shop-title">AMMU-NATION</h1>
+  <div id="shop-items"></div>
+  <div id="shop-cash"></div>
+  <p id="shop-hint">Press 1–9 to buy &nbsp;·&nbsp; E or Esc to leave</p>
 </div>
 
 <div class="overlay" id="screen-job">

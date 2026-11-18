@@ -164,6 +164,15 @@ export function spawnPedestrian(scene, rng, cfg, blockCenters) {
     fleeZ: 0,
     walkTimer: rng.range(2, 8),
     bob: rng.range(0, Math.PI * 2),
+    // v9 iteration 4: panic timer (how long the flee lasts before the ped
+    // calms down), dodge data (sidestep from a closing car), and an
+    // optional chat spot — a fixed place where this ped stops to talk in
+    // a group (assigned by the game for a few peds, null for the rest).
+    panicT: 0,
+    dodgeT: 0,
+    dodgeX: 0,
+    dodgeZ: 0,
+    chat: null,
   };
 }
 
@@ -197,28 +206,68 @@ export function spawnVendor(scene, rng, x, z, facing) {
   };
 }
 
-export function updatePedestrian(p, dt, cfg, gunshotPos, isRoad) {
+// Pedestrian state machine (v9 iteration 4): walk the sidewalks, idle in
+// groups at a chat spot, panic and flee gunfire/explosions, dodge a car
+// that is closing in on them, and vendors mind their stall (walking back
+// to it after a panic — the old code left a fled vendor wandering).
+// States: 'walk' | 'idle' | 'panic' | 'dodge' | 'vendor'. The game passes
+// `cars` (player + traffic + police, each with group/speed/heading) so a
+// ped can read an approaching car; the callers that only scare the crowd
+// (shoot/knife) pass no cars and the dodge step is skipped.
+export function updatePedestrian(p, dt, cfg, gunshotPos, isRoad, cars) {
   const pos = p.group.position;
   if (gunshotPos) {
     const dx = pos.x - gunshotPos.x;
     const dz = pos.z - gunshotPos.z;
     const d = Math.hypot(dx, dz);
     if (d < cfg.pedestrians.fleeRadius) {
-      p.state = 'flee';
+      p.state = 'panic';
+      p.panicT = 3;
       p.fleeX = dx / (d || 1);
       p.fleeZ = dz / (d || 1);
     }
   }
-  if (p.state === 'flee') {
+  // Dodge: a fast car closing in on the ped from ahead. The ped sidesteps
+  // perpendicular to the car's heading for 0.6 s — enough to clear the
+  // lane, not enough to teleport across the street.
+  if (cars && p.state !== 'panic' && p.state !== 'vendor') {
+    for (const c of cars) {
+      if (!c || !c.group) continue;
+      const sp = Math.abs(c.speed || 0);
+      if (sp < 4) continue;
+      const dx = pos.x - c.group.position.x;
+      const dz = pos.z - c.group.position.z;
+      const d = Math.hypot(dx, dz);
+      if (d > 8 || d < 0.01) continue;
+      const hx = Math.sin(c.heading);
+      const hz = Math.cos(c.heading);
+      // The ped is ahead of the car (the car is closing on them): the
+      // vector from the car to the ped points along the car's heading,
+      // so the dot product is POSITIVE when the ped is in front. Skip
+      // when it is zero or negative (the ped is behind the car).
+      if ((dx * hx + dz * hz) <= 0) continue;
+      p.state = 'dodge';
+      p.dodgeT = 0.6;
+      p.dodgeX = -hz;
+      p.dodgeZ = hx;
+      break;
+    }
+  }
+  if (p.state === 'panic') {
     const nx = pos.x + p.fleeX * cfg.pedestrians.fleeSpeed * dt;
     const nz = pos.z + p.fleeZ * cfg.pedestrians.fleeSpeed * dt;
     if (Math.abs(nx) < 145 && Math.abs(nz) < 145) {
       pos.x = nx;
       pos.z = nz;
-    } else {
-      p.state = 'walk';
     }
     p.heading = Math.atan2(p.fleeX, p.fleeZ);
+    p.panicT -= dt;
+    if (p.panicT <= 0) p.state = p.home ? 'vendor' : 'walk';
+  } else if (p.state === 'dodge') {
+    pos.x += p.dodgeX * 3.5 * dt;
+    pos.z += p.dodgeZ * 3.5 * dt;
+    p.dodgeT -= dt;
+    if (p.dodgeT <= 0) p.state = 'walk';
   } else if (p.state === 'vendor') {
     // Vendors stand their ground and mind the stall. They only move when
     // they flee — and after the panic they walk back to the stall.
@@ -235,11 +284,37 @@ export function updatePedestrian(p, dt, cfg, gunshotPos, isRoad) {
         p.heading = home.facing;
       }
     }
+  } else if (p.state === 'idle') {
+    // Chatting in a group: drift to the chat spot, face the partner, and
+    // stand there until the timer runs out.
+    p.walkTimer -= dt;
+    if (p.chat) {
+      const dx = p.chat.x - pos.x;
+      const dz = p.chat.z - pos.z;
+      const d = Math.hypot(dx, dz);
+      if (d > 0.5) {
+        pos.x += (dx / d) * cfg.pedestrians.walkSpeed * dt;
+        pos.z += (dz / d) * cfg.pedestrians.walkSpeed * dt;
+        p.heading = Math.atan2(dx, dz);
+      } else {
+        p.heading = p.chat.face;
+      }
+    }
+    if (p.walkTimer <= 0) {
+      p.state = 'walk';
+      p.walkTimer = 2 + Math.random() * 6;
+    }
   } else {
     p.walkTimer -= dt;
     if (p.walkTimer <= 0) {
-      p.walkTimer = 2 + Math.random() * 6;
-      p.heading += (Math.random() - 0.5) * 2.4;
+      // A ped with a chat spot sometimes stops to talk instead of turning.
+      if (p.chat && Math.random() < 0.5) {
+        p.state = 'idle';
+        p.walkTimer = 3 + Math.random() * 4;
+      } else {
+        p.walkTimer = 2 + Math.random() * 6;
+        p.heading += (Math.random() - 0.5) * 2.4;
+      }
     }
     const nx = pos.x + Math.sin(p.heading) * p.speed * dt;
     const nz = pos.z + Math.cos(p.heading) * p.speed * dt;
@@ -258,15 +333,30 @@ export function updatePedestrian(p, dt, cfg, gunshotPos, isRoad) {
     }
   }
   p.group.rotation.y = p.heading;
-  p.bob += dt * (p.state === 'flee' ? 14 : 7);
-  const swing = Math.sin(p.bob) * (p.state === 'flee' ? 0.85 : 0.55);
+  p.bob += dt * (p.state === 'panic' ? 14 : p.state === 'dodge' ? 10 : 7);
+  const swing = Math.sin(p.bob) * (p.state === 'panic' ? 0.85 : 0.55);
   const joints = p.group.userData;
   if (joints.armL) {
-    joints.armL.rotation.x = p.state === 'vendor' ? 0.15 : swing;
-    joints.armR.rotation.x = p.state === 'vendor' ? 0.15 : -swing;
-    joints.legL.rotation.x = p.state === 'vendor' ? 0 : -swing;
-    joints.legR.rotation.x = p.state === 'vendor' ? 0 : swing;
-    joints.rig.rotation.x = p.state === 'flee' ? 0.14 : 0.03;
+    if (p.state === 'panic') {
+      // Arms up while fleeing.
+      joints.armL.rotation.x = -2.2;
+      joints.armR.rotation.x = -2.2;
+    } else if (p.state === 'dodge') {
+      joints.armL.rotation.x = -1.4;
+      joints.armR.rotation.x = -1.4;
+    } else if (p.state === 'vendor') {
+      joints.armL.rotation.x = 0.15;
+      joints.armR.rotation.x = 0.15;
+    } else if (p.state === 'idle') {
+      joints.armL.rotation.x = 0;
+      joints.armR.rotation.x = 0;
+    } else {
+      joints.armL.rotation.x = swing;
+      joints.armR.rotation.x = -swing;
+    }
+    joints.legL.rotation.x = p.state === 'vendor' || p.state === 'idle' ? 0 : -swing;
+    joints.legR.rotation.x = p.state === 'vendor' || p.state === 'idle' ? 0 : swing;
+    joints.rig.rotation.x = p.state === 'panic' ? 0.14 : 0.03;
   }
   // The walk cycle swings the legs and arms as a pendulum around the hip
   // and shoulder pivots. The group itself NEVER lifts off the ground: the
@@ -293,6 +383,18 @@ export function spawnEnemy(scene, x, z, rng) {
   barrel.rotation.x = Math.PI / 2;
   barrel.position.set(0.36, 1.05, 0.45);
   mesh.userData.rig.add(barrel);
+  // Reef Kings faction (v9 iteration 4): a red headband that only shows
+  // when the faction is aggro — the player walked into their territory
+  // (the docks) or shot one of them. Aggro Kings close in faster, shoot
+  // further and hit more often (see updateEnemy).
+  const aggroBand = new THREE.Mesh(
+    geo('aggroBand', () => new THREE.BoxGeometry(0.5, 0.09, 0.5)),
+    mat(0xc22a22, 0.8),
+  );
+  aggroBand.position.y = 2.02;
+  aggroBand.visible = false;
+  mesh.userData.rig.add(aggroBand);
+  mesh.userData.aggroBand = aggroBand;
   mesh.position.set(x, 0, z);
   scene.add(mesh);
   return {
@@ -301,10 +403,11 @@ export function spawnEnemy(scene, x, z, rng) {
     health: 100,
     cooldown: 1,
     alive: true,
+    aggro: false,
   };
 }
 
-export function updateEnemy(e, dt, cfg, playerPos, onShoot) {
+export function updateEnemy(e, dt, cfg, playerPos, onShoot, factionAggro) {
   if (!e.alive) return;
   const pos = e.group.position;
   const dx = playerPos.x - pos.x;
@@ -313,13 +416,22 @@ export function updateEnemy(e, dt, cfg, playerPos, onShoot) {
   e.heading = Math.atan2(dx, dz);
   e.group.rotation.y = e.heading;
   e.cooldown -= dt;
-  if (dist < cfg.combat.enemyShootRange && e.cooldown <= 0) {
+  // Aggro (v9 iteration 4): the faction is hunting you — longer reach,
+  // better aim, faster close-in. The red headband shows it.
+  const aggro = !!factionAggro;
+  e.aggro = aggro;
+  if (e.group.userData.aggroBand) e.group.userData.aggroBand.visible = aggro;
+  const range = aggro ? cfg.combat.enemyShootRange + 6 : cfg.combat.enemyShootRange;
+  const accuracy = aggro ? Math.min(0.7, cfg.combat.enemyAccuracy * 1.27) : cfg.combat.enemyAccuracy;
+  if (dist < range && e.cooldown <= 0) {
     e.cooldown = cfg.combat.enemyShootCooldown * (0.8 + Math.random() * 0.5);
-    if (Math.random() < cfg.combat.enemyAccuracy) onShoot(e);
+    if (Math.random() < accuracy) onShoot(e);
   }
   // Enemies close in slowly when the player is far, so the fight moves.
-  if (dist > 18 && dist < cfg.combat.enemyShootRange) {
-    pos.x += (dx / dist) * 2.2 * dt;
-    pos.z += (dz / dist) * 2.2 * dt;
+  // Aggro Kings close in almost twice as fast.
+  if (dist > 18 && dist < range) {
+    const closeSpeed = aggro ? 4 : 2.2;
+    pos.x += (dx / dist) * closeSpeed * dt;
+    pos.z += (dz / dist) * closeSpeed * dt;
   }
 }

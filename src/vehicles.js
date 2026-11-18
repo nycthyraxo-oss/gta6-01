@@ -265,11 +265,13 @@ export function makeCarMesh(color, isPolice) {
   // Headlights that glow, taillights that read red at dusk.
   // Per-car materials (owned — see makeCarMesh) so one car's lights can
   // be disposed without touching any other car.
-  const headMat = own(new THREE.MeshBasicMaterial({ color: 0xfff6c8 }));
+  // v9 iteration 4: HDR colours (> 1) so only the lights bloom — the
+  // bloom threshold is 0.9 and a plain 0xfff6c8 would not clear it.
+  const headMat = own(new THREE.MeshBasicMaterial({ color: new THREE.Color(2.2, 2.0, 1.4) }));
   for (const hx of [-W * 0.32, W * 0.32]) {
     group.add(box(0.34, 0.16, 0.08, headMat, hx, bodyY + 0.08, L / 2 + 0.1));
   }
-  const tailMat = own(new THREE.MeshBasicMaterial({ color: 0xff2a22 }));
+  const tailMat = own(new THREE.MeshBasicMaterial({ color: new THREE.Color(1.8, 0.25, 0.2) }));
   for (const tx of [-W * 0.32, W * 0.32]) {
     group.add(box(0.34, 0.16, 0.08, tailMat, tx, bodyY + 0.08, -L / 2 - 0.1));
   }
@@ -305,7 +307,7 @@ export function makeCarMesh(color, isPolice) {
     lightBar = { left: redMat, right: blueMat };
   }
 
-  return { group, wheels, driver, lightBar };
+  return { group, wheels, driver, lightBar, headMat, tailMat };
 }
 
 // Dispose the per-instance GPU resources of a car mesh built by
@@ -343,6 +345,8 @@ export function createCar(scene, x, z, heading, color, isPolice, cruiseSpeed) {
     wheels: mesh.wheels,
     driver: mesh.driver,
     lightBar: mesh.lightBar,
+    headMat: mesh.headMat,
+    tailMat: mesh.tailMat,
     heading,
     speed: 0,
     cruiseSpeed: speed,
@@ -528,13 +532,20 @@ export function createSkids(scene) {
     marks.push(m);
   }
   let next = 0;
+  let added = 0;
   return {
     add(x, z, heading) {
       const m = marks[next];
       next = (next + 1) % marks.length;
+      added += 1;
       m.position.set(x, 0.06, z);
       m.rotation.z = -heading;
       m.visible = true;
+    },
+    // How many marks have ever been laid (capped at the pool size) — the
+    // probe reads this to prove handbrake drifting actually leaves marks.
+    count() {
+      return Math.min(added, marks.length);
     },
   };
 }

@@ -396,13 +396,61 @@ export function buildCity(scene, rng, cfg) {
   // v9: the open ground is wet (sheen, not dry dirt).
   group.add(wetFlat(W.groundSize, W.groundSize, wetGroundMat, 0, 0, -0.05));
   group.add(flat(40, W.groundSize, cfg.palette.sand, W.beachX + 12, 0, 0.0));
+  // v9 iteration 4: the sea is a real shader now — two sine waves in the
+  // vertex shader, a shallow-to-deep shore gradient in the fragment
+  // shader, and a sun/moon specular glint that follows the day cycle.
+  // updateSea() (bottom of buildCity) feeds it the clock-driven sun.
+  const seaUniforms = {
+    uTime: { value: 0 },
+    uSunDir: { value: new THREE.Vector3(0.5, 0.5, 0.4).normalize() },
+    uSunColor: { value: new THREE.Color(0xffb27a) },
+  };
+  const seaMat = new THREE.ShaderMaterial({
+    uniforms: seaUniforms,
+    vertexShader: [
+      'uniform float uTime;',
+      'varying vec3 vWorld;',
+      'varying vec3 vNormal;',
+      'void main() {',
+      '  vec3 p = position;',
+      '  float w1 = sin(p.x * 0.08 + uTime * 0.9) * 0.35;',
+      '  float w2 = sin(p.y * 0.06 + uTime * 0.6 + 1.7) * 0.25;',
+      '  p.z += w1 + w2;',
+      '  float dx = 0.08 * 0.35 * cos(p.x * 0.08 + uTime * 0.9);',
+      '  float dy = 0.06 * 0.25 * cos(p.y * 0.06 + uTime * 0.6 + 1.7);',
+      '  vNormal = normalize(mat3(modelMatrix) * vec3(-dx, -dy, 1.0));',
+      '  vec4 wp = modelMatrix * vec4(p, 1.0);',
+      '  vWorld = wp.xyz;',
+      '  gl_Position = projectionMatrix * viewMatrix * wp;',
+      '}',
+    ].join('\n'),
+    fragmentShader: [
+      'uniform vec3 uSunDir;',
+      'uniform vec3 uSunColor;',
+      'varying vec3 vWorld;',
+      'varying vec3 vNormal;',
+      'void main() {',
+      '  float t = clamp((vWorld.x - 173.0) / 120.0, 0.0, 1.0);',
+      '  vec3 shallow = vec3(0.16, 0.45, 0.48);',
+      '  vec3 deep = vec3(0.04, 0.14, 0.26);',
+      '  vec3 col = mix(shallow, deep, smoothstep(0.0, 0.75, t));',
+      '  vec3 n = normalize(vNormal);',
+      '  vec3 viewDir = normalize(cameraPosition - vWorld);',
+      '  vec3 refl = reflect(-normalize(uSunDir), n);',
+      '  float spec = pow(max(dot(refl, viewDir), 0.0), 90.0);',
+      '  col += uSunColor * spec * 1.4;',
+      '  float fres = pow(1.0 - max(dot(n, viewDir), 0.0), 3.0);',
+      '  col += vec3(0.35, 0.25, 0.35) * fres * 0.35;',
+      '  gl_FragColor = vec4(col, 1.0);',
+      '}',
+    ].join('\n'),
+  });
   const sea = new THREE.Mesh(
-    new THREE.PlaneGeometry(120, W.groundSize),
-    new THREE.MeshStandardMaterial({ color: cfg.palette.sea, roughness: 0.35, metalness: 0.1 }),
+    new THREE.PlaneGeometry(120, W.groundSize, 24, 60),
+    seaMat,
   );
   sea.rotation.x = -Math.PI / 2;
   sea.position.set(W.seaX + 55, 0.15, 0);
-  sea.receiveShadow = true;
   group.add(sea);
 
   // Roads: dark wet strips along every grid line.
@@ -525,7 +573,10 @@ export function buildCity(scene, rng, cfg) {
 
   const signTextures = SHOP_SIGNS.map((s) => signTexture(s.text, s.bg, s.fg));
   let signNext = 0;
-  const glowMat = new THREE.MeshBasicMaterial({ color: 0xffe9a8 });
+  // v9 iteration 4: the lit lamp is HDR (> 1) so it blooms — the bloom
+  // threshold is 0.9 and a plain 0xff2222 / 0x11aa33 would not clear it.
+  // The dim lamp of each pair stays dim (it is the "off" lamp).
+  const glowMat = new THREE.MeshBasicMaterial({ color: new THREE.Color(1.9, 1.6, 0.9) });
 
   // Every raised building is recorded for the v9 rooftop-clutter pass
   // (below the building loop): the pass reads these records, it never
@@ -567,7 +618,7 @@ export function buildCity(scene, rng, cfg) {
       group.add(crown);
       const neon = new THREE.Mesh(
         new THREE.BoxGeometry(w * 0.72, 0.18, d * 0.72),
-        new THREE.MeshBasicMaterial({ color: 0xffd23e }),
+        new THREE.MeshBasicMaterial({ color: new THREE.Color(2.0, 1.7, 0.4) }),
       );
       neon.position.set(ox, h + 1.75, oz);
       group.add(neon);
@@ -580,7 +631,7 @@ export function buildCity(scene, rng, cfg) {
       group.add(mast);
       const tip = new THREE.Mesh(
         new THREE.SphereGeometry(0.18, 8, 6),
-        new THREE.MeshBasicMaterial({ color: 0xff4444 }),
+        new THREE.MeshBasicMaterial({ color: new THREE.Color(2.0, 0.3, 0.3) }),
       );
       tip.position.set(ox, h + 5, oz);
       group.add(tip);
@@ -718,7 +769,7 @@ export function buildCity(scene, rng, cfg) {
   group.add(towerTop);
   const beacon = new THREE.Mesh(
     new THREE.SphereGeometry(1.4, 12, 8),
-    new THREE.MeshBasicMaterial({ color: 0xff4444 }),
+    new THREE.MeshBasicMaterial({ color: new THREE.Color(2.0, 0.3, 0.3) }),
   );
   beacon.position.set(0, W.towerH + 4, 0);
   group.add(beacon);
@@ -844,7 +895,7 @@ export function buildCity(scene, rng, cfg) {
   group.add(gMast);
   const gTip = new THREE.Mesh(
     new THREE.SphereGeometry(0.18, 8, 6),
-    new THREE.MeshBasicMaterial({ color: 0xff4444 }),
+    new THREE.MeshBasicMaterial({ color: new THREE.Color(2.0, 0.3, 0.3) }),
   );
   gTip.position.set(-108, 11, 80);
   group.add(gTip);
@@ -914,7 +965,7 @@ export function buildCity(scene, rng, cfg) {
       group.add(crown);
       const neon = new THREE.Mesh(
         new THREE.BoxGeometry(w * 0.72, 0.18, d * 0.72),
-        new THREE.MeshBasicMaterial({ color: 0xffd23e }),
+        new THREE.MeshBasicMaterial({ color: new THREE.Color(2.0, 1.7, 0.4) }),
       );
       neon.position.set(ox, h + 1.75, oz);
       group.add(neon);
@@ -927,7 +978,7 @@ export function buildCity(scene, rng, cfg) {
       group.add(mast);
       const tip = new THREE.Mesh(
         new THREE.SphereGeometry(0.18, 8, 6),
-        new THREE.MeshBasicMaterial({ color: 0xff4444 }),
+        new THREE.MeshBasicMaterial({ color: new THREE.Color(2.0, 0.3, 0.3) }),
       );
       tip.position.set(ox, h + 5, oz);
       group.add(tip);
@@ -973,7 +1024,7 @@ export function buildCity(scene, rng, cfg) {
       for (const dx of [-w * 0.17, w * 0.17]) {
         const display = new THREE.Mesh(
           new THREE.PlaneGeometry(w * 0.26, 1.6),
-          new THREE.MeshBasicMaterial({ color: hash01(ox, oz, 51) < 0.5 ? 0xffca7a : 0xffe9a8 }),
+          new THREE.MeshBasicMaterial({ color: hash01(ox, oz, 51) < 0.5 ? new THREE.Color(1.6, 1.0, 0.45) : new THREE.Color(1.8, 1.5, 0.85) }),
         );
         display.position.set(ox + dx, 1.4, oz + d / 2 + 0.52);
         group.add(display);
@@ -1439,33 +1490,79 @@ export function buildCity(scene, rng, cfg) {
 
   // Palms along the beach and a few on the avenues, denser than before —
   // the coast is palm-lined now, and the avenues get trees too.
+  // v9 iteration 4: palms are RECORDED here and instanced below
+  // (InstancedMesh: one draw call for all trunks, one for all leaves),
+  // so the beach keeps its trees without paying a draw call per palm.
+  // The leaf material sways in the wind (onBeforeCompile, updateWind).
+  // Call sites keep their exact rng draws — only the add() wrapper
+  // changes, so the city layout stays byte-identical.
+  const palmSpots = [];
   function palm(x, z) {
-    const g = new THREE.Group();
-    const trunk = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.25, 0.4, 7, 6),
-      new THREE.MeshStandardMaterial({ color: PALM_TRUNK, roughness: 1 }),
+    palmSpots.push({ x, z });
+  }
+  const palmTrunkGeo = new THREE.CylinderGeometry(0.25, 0.4, 7, 6);
+  const palmTrunkMat = new THREE.MeshStandardMaterial({ color: PALM_TRUNK, roughness: 1 });
+  const palmLeafGeo = new THREE.ConeGeometry(0.9, 4.5, 4);
+  const palmLeafMat = new THREE.MeshStandardMaterial({ color: PALM_LEAF, roughness: 1 });
+  // Wind sway for the leaves: a vertex-shader bend that scales with the
+  // instance's world position, so neighbouring palms sway out of phase.
+  // The cache key keeps this compiled program separate from the plain
+  // leaf material used anywhere else.
+  const windUniform = { value: 0 };
+  palmLeafMat.onBeforeCompile = (shader) => {
+    shader.uniforms.uTime = windUniform;
+    shader.vertexShader = 'uniform float uTime;\n' + shader.vertexShader.replace(
+      '#include <begin_vertex>',
+      [
+        '#include <begin_vertex>',
+        '#ifdef USE_INSTANCING',
+        '  vec3 ip = vec3(instanceMatrix[3][0], instanceMatrix[3][1], instanceMatrix[3][2]);',
+        '  float swayPhase = ip.x * 0.13 + ip.z * 0.11;',
+        '  float swayAmt = sin(uTime * 1.4 + swayPhase) * 0.09 * transformed.y;',
+        '  transformed.x += swayAmt;',
+        '  transformed.z += cos(uTime * 1.1 + swayPhase) * 0.06 * transformed.y;',
+        '#endif',
+      ].join('\n'),
     );
-    trunk.position.y = 3.5;
-    trunk.castShadow = true;
-    g.add(trunk);
-    for (let i = 0; i < 5; i += 1) {
-      const leaf = new THREE.Mesh(
-        new THREE.ConeGeometry(0.9, 4.5, 4),
-        new THREE.MeshStandardMaterial({ color: PALM_LEAF, roughness: 1 }),
-      );
-      const a = (i / 5) * Math.PI * 2;
-      leaf.position.set(Math.cos(a) * 1.6, 7.2, Math.sin(a) * 1.6);
-      leaf.rotation.z = Math.cos(a) * 1.1;
-      leaf.rotation.x = -Math.sin(a) * 1.1;
-      g.add(leaf);
-    }
-    g.position.set(x, 0, z);
-    return g;
+  };
+  palmLeafMat.customProgramCacheKey = () => 'palm-leaf-sway';
+  function buildPalmInstances() {
+    const n = palmSpots.length;
+    const dummy = new THREE.Object3D();
+    const trunks = new THREE.InstancedMesh(palmTrunkGeo, palmTrunkMat, n);
+    const leaves = new THREE.InstancedMesh(palmLeafGeo, palmLeafMat, n * 5);
+    trunks.castShadow = true;
+    trunks.receiveShadow = true;
+    let li = 0;
+    palmSpots.forEach((spot, i) => {
+      dummy.position.set(spot.x, 3.5, spot.z);
+      dummy.rotation.set(0, 0, 0);
+      dummy.scale.setScalar(1);
+      dummy.updateMatrix();
+      trunks.setMatrixAt(i, dummy.matrix);
+      for (let k = 0; k < 5; k += 1) {
+        const a = (k / 5) * Math.PI * 2;
+        dummy.position.set(
+          spot.x + Math.cos(a) * 1.6,
+          7.2,
+          spot.z + Math.sin(a) * 1.6,
+        );
+        dummy.rotation.set(-Math.sin(a) * 1.1, 0, Math.cos(a) * 1.1);
+        dummy.scale.setScalar(1);
+        dummy.updateMatrix();
+        leaves.setMatrixAt(li, dummy.matrix);
+        li += 1;
+      }
+    });
+    trunks.instanceMatrix.needsUpdate = true;
+    leaves.instanceMatrix.needsUpdate = true;
+    group.add(trunks);
+    group.add(leaves);
   }
   for (let z = -140; z <= 140; z += 28) {
-    group.add(palm(W.beachX + 4 + rng.range(-2, 2), z + rng.range(-4, 4)));
-    group.add(palm(W.beachX - 6 + rng.range(-2, 2), z + 14 + rng.range(-4, 4)));
-    if (rng.chance(0.5)) group.add(palm(-140 + rng.range(-2, 2), z));
+    palm(W.beachX + 4 + rng.range(-2, 2), z + rng.range(-4, 4));
+    palm(W.beachX - 6 + rng.range(-2, 2), z + 14 + rng.range(-4, 4));
+    if (rng.chance(0.5)) palm(-140 + rng.range(-2, 2), z);
   }
   // Leafy avenue trees, one or two per block edge, seeded.
   for (const bx of blockCenters) {
@@ -1494,45 +1591,109 @@ export function buildCity(scene, rng, cfg) {
   // first frame a new player sees already has a bench, a hydrant and a
   // bin in it.
   const hydrantMat = new THREE.MeshStandardMaterial({ color: 0xc22a22, roughness: 0.7 });
+  // v9 iteration 4: hydrants are RECORDED and instanced below (body +
+  // cap, two draw calls for all 19). Same rng-neutral rule as the palms.
+  const hydrantSpots = [];
   function hydrant(x, z) {
-    const h = new THREE.Group();
-    const bodyH = new THREE.Mesh(new THREE.CylinderGeometry(0.22, 0.26, 0.7, 8), hydrantMat);
-    bodyH.position.y = 0.35;
-    bodyH.castShadow = true;
-    h.add(bodyH);
-    const cap = new THREE.Mesh(new THREE.SphereGeometry(0.2, 8, 6), hydrantMat);
-    cap.position.y = 0.75;
-    h.add(cap);
-    h.position.set(x, 0, z);
-    return h;
+    hydrantSpots.push({ x, z });
+  }
+  function buildHydrantInstances() {
+    const n = hydrantSpots.length;
+    const dummy = new THREE.Object3D();
+    const bodies = new THREE.InstancedMesh(
+      new THREE.CylinderGeometry(0.22, 0.26, 0.7, 8), hydrantMat, n,
+    );
+    const caps = new THREE.InstancedMesh(
+      new THREE.SphereGeometry(0.2, 8, 6), hydrantMat, n,
+    );
+    bodies.castShadow = true;
+    hydrantSpots.forEach((spot, i) => {
+      dummy.position.set(spot.x, 0.35, spot.z);
+      dummy.rotation.set(0, 0, 0);
+      dummy.scale.setScalar(1);
+      dummy.updateMatrix();
+      bodies.setMatrixAt(i, dummy.matrix);
+      dummy.position.set(spot.x, 0.75, spot.z);
+      dummy.updateMatrix();
+      caps.setMatrixAt(i, dummy.matrix);
+    });
+    bodies.instanceMatrix.needsUpdate = true;
+    caps.instanceMatrix.needsUpdate = true;
+    group.add(bodies);
+    group.add(caps);
   }
   const benchMat = new THREE.MeshStandardMaterial({ color: 0x6a4a2a, roughness: 0.9 });
+  // v9 iteration 4: benches are RECORDED and instanced below (seat +
+  // back + legs, three draw calls for all 18). Rotation is part of the
+  // recorded spot, so the tidy aligned benches stay tidy.
+  const benchSpots = [];
   function bench(x, z, rot) {
-    const b = new THREE.Group();
-    const seat = new THREE.Mesh(new THREE.BoxGeometry(2.4, 0.12, 0.6), benchMat);
-    seat.position.y = 0.5;
-    seat.castShadow = true;
-    b.add(seat);
-    const back = new THREE.Mesh(new THREE.BoxGeometry(2.4, 0.6, 0.1), benchMat);
-    back.position.set(0, 0.85, -0.28);
-    b.add(back);
-    for (const lx of [-1, 1]) {
-      const leg = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.5, 0.5), benchMat);
-      leg.position.set(lx, 0.25, 0);
-      b.add(leg);
-    }
-    b.position.set(x, 0, z);
-    b.rotation.y = rot;
-    return b;
+    benchSpots.push({ x, z, rot });
   }
+  function buildBenchInstances() {
+    const n = benchSpots.length;
+    const dummy = new THREE.Object3D();
+    const seats = new THREE.InstancedMesh(
+      new THREE.BoxGeometry(2.4, 0.12, 0.6), benchMat, n,
+    );
+    const backs = new THREE.InstancedMesh(
+      new THREE.BoxGeometry(2.4, 0.6, 0.1), benchMat, n,
+    );
+    const legs = new THREE.InstancedMesh(
+      new THREE.BoxGeometry(0.1, 0.5, 0.5), benchMat, n * 2,
+    );
+    seats.castShadow = true;
+    benchSpots.forEach((spot, i) => {
+      dummy.rotation.set(0, spot.rot, 0);
+      dummy.scale.setScalar(1);
+      dummy.position.set(spot.x, 0.5, spot.z);
+      dummy.updateMatrix();
+      seats.setMatrixAt(i, dummy.matrix);
+      dummy.position.set(spot.x, 0.85, spot.z - 0.28 * Math.cos(spot.rot));
+      dummy.position.x = spot.x - 0.28 * Math.sin(spot.rot);
+      dummy.updateMatrix();
+      backs.setMatrixAt(i, dummy.matrix);
+      for (const [k, lx] of [-1, 1].entries()) {
+        dummy.position.set(
+          spot.x + lx * Math.cos(spot.rot),
+          0.25,
+          spot.z - lx * Math.sin(spot.rot),
+        );
+        dummy.updateMatrix();
+        legs.setMatrixAt(i * 2 + k, dummy.matrix);
+      }
+    });
+    seats.instanceMatrix.needsUpdate = true;
+    backs.instanceMatrix.needsUpdate = true;
+    legs.instanceMatrix.needsUpdate = true;
+    group.add(seats);
+    group.add(backs);
+    group.add(legs);
+  }
+  // v9 iteration 4: bins are RECORDED and instanced below (one draw call
+  // for all 11).
+  const binSpots = [];
   function bin(x, z) {
-    const b = new THREE.Mesh(
+    binSpots.push({ x, z });
+  }
+  function buildBinInstances() {
+    const n = binSpots.length;
+    const dummy = new THREE.Object3D();
+    const bins = new THREE.InstancedMesh(
       new THREE.CylinderGeometry(0.45, 0.4, 1.1, 10),
       cityMat(0x2a4a3a, 0.8, 0.3),
+      n,
     );
-    b.position.set(x, 0.55, z);
-    b.castShadow = true;
-    return b;
+    bins.castShadow = true;
+    binSpots.forEach((spot, i) => {
+      dummy.position.set(spot.x, 0.55, spot.z);
+      dummy.rotation.set(0, 0, 0);
+      dummy.scale.setScalar(1);
+      dummy.updateMatrix();
+      bins.setMatrixAt(i, dummy.matrix);
+    });
+    bins.instanceMatrix.needsUpdate = true;
+    group.add(bins);
   }
 
   // Neon Plaza: the central plaza landmark, one block east of the tower —
@@ -1562,13 +1723,13 @@ export function buildCity(scene, rng, cfg) {
   plazaCyl(6, 6, 0.9, 0x6a7a8a, 56, 0.45, 0);
   const plazaWater = new THREE.Mesh(
     new THREE.CircleGeometry(5, 24),
-    new THREE.MeshBasicMaterial({ color: 0x35e0e6 }),
+    new THREE.MeshBasicMaterial({ color: new THREE.Color(0.35, 1.5, 1.5) }),
   );
   plazaWater.rotation.x = -Math.PI / 2;
   plazaWater.position.set(56, 0.92, 0);
   group.add(plazaWater);
   plazaCyl(0.8, 0.8, 4, 0x2a2f38, 56, 2.9, 0);
-  for (const [ry, color] of [[2.6, 0xff2fb3], [3.6, 0x35e0e6]]) {
+  for (const [ry, color] of [[2.6, new THREE.Color(2.0, 0.4, 1.4)], [3.6, new THREE.Color(0.4, 2.0, 2.0)]]) {
     const ring = new THREE.Mesh(
       new THREE.TorusGeometry(1.3, 0.12, 8, 24),
       new THREE.MeshBasicMaterial({ color }),
@@ -1577,26 +1738,26 @@ export function buildCity(scene, rng, cfg) {
     ring.position.set(56, ry, 0);
     group.add(ring);
   }
-  group.add(bench(56, -14, 0));
-  group.add(bench(56, 14, Math.PI));
-  group.add(bench(42, 0, Math.PI / 2));
-  group.add(bench(70, 0, -Math.PI / 2));
-  group.add(palm(40, -16));
-  group.add(palm(72, -16));
-  group.add(palm(40, 16));
-  group.add(palm(72, 16));
+  bench(56, -14, 0);
+  bench(56, 14, Math.PI);
+  bench(42, 0, Math.PI / 2);
+  bench(70, 0, -Math.PI / 2);
+  palm(40, -16);
+  palm(72, -16);
+  palm(40, 16);
+  palm(72, 16);
 
-  group.add(hydrant(-104, 52));
+  hydrant(-104, 52);
   // Spawn benches (v9 iteration 3): aligned to the nearest road instead
   // of tilted at 0.6 / -0.4 rad — the east one faces the Coral Row road,
   // the north one faces the road by the garage.
-  group.add(bench(-100, 50, Math.PI / 2));
-  group.add(bin(-106, 68));
-  group.add(bench(-118, 72, 0));
+  bench(-100, 50, Math.PI / 2);
+  bin(-106, 68);
+  bench(-118, 72, 0);
   for (let i = 0; i < 18; i += 1) {
     const hx = blockCenters[Math.floor(rng.next() * blockCenters.length)] + rng.range(-24, 24);
     const hz = blockCenters[Math.floor(rng.next() * blockCenters.length)] + rng.range(-24, 24);
-    group.add(hydrant(hx, hz));
+    hydrant(hx, hz);
   }
   // Roadside benches (v9 iteration 3): the same rng draws, but the bench
   // is snapped to the nearest sidewalk edge — 8.5 from the road line, on
@@ -1634,12 +1795,12 @@ export function buildCity(scene, rng, cfg) {
         else sx += 4;
       }
     }
-    group.add(bench(sx, sz, rot));
+    bench(sx, sz, rot);
   }
   for (let i = 0; i < 10; i += 1) {
     const bx3 = blockCenters[Math.floor(rng.next() * blockCenters.length)] + rng.range(-22, 22);
     const bz3 = blockCenters[Math.floor(rng.next() * blockCenters.length)] + rng.range(-22, 22);
-    group.add(bin(bx3, bz3));
+    bin(bx3, bz3);
   }
   for (let z = -120; z <= 120; z += 40) {
     const umb = new THREE.Group();
@@ -1668,10 +1829,10 @@ export function buildCity(scene, rng, cfg) {
       ns: {
         red: new THREE.MeshBasicMaterial({ color: 0x661111 }),
         yellow: new THREE.MeshBasicMaterial({ color: 0x554411 }),
-        green: new THREE.MeshBasicMaterial({ color: 0x11aa33 }),
+        green: new THREE.MeshBasicMaterial({ color: new THREE.Color(0.3, 2.0, 0.5) }),
       },
       ew: {
-        red: new THREE.MeshBasicMaterial({ color: 0xff2222 }),
+        red: new THREE.MeshBasicMaterial({ color: new THREE.Color(2.0, 0.25, 0.25) }),
         yellow: new THREE.MeshBasicMaterial({ color: 0x554411 }),
         green: new THREE.MeshBasicMaterial({ color: 0x114422 }),
       },
@@ -1734,21 +1895,43 @@ export function buildCity(scene, rng, cfg) {
     }
   }
 
-  // Street lamps along the avenues.
+  // Street lamps along the avenues. v9 iteration 4: the poles and bulbs
+  // are recorded here and instanced below (one draw call for all 30
+  // poles, one for all 30 bulbs) instead of two meshes per lamp.
   const lampMat = new THREE.MeshStandardMaterial({ color: 0x2a2d33, roughness: 0.6, metalness: 0.6 });
-  const bulbMat = new THREE.MeshBasicMaterial({ color: 0xffe9a8 });
+  // HDR bulb colour (> 1) so the bulbs bloom — the bloom threshold is
+  // 0.9 and the old 0xffe9a8 would not clear it.
+  const bulbMat = new THREE.MeshBasicMaterial({ color: new THREE.Color(1.6, 1.35, 0.75) });
   const lampSpots = [];
   for (const c of roadLines) {
     for (let t = -half + 20; t < half - 10; t += 56) {
-      const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.12, 0.16, 6, 6), lampMat);
-      pole.position.set(c + W.roadWidth / 2 + 1, 3, t);
-      pole.castShadow = true;
-      group.add(pole);
-      const bulb = new THREE.Mesh(new THREE.SphereGeometry(0.35, 8, 6), bulbMat);
-      bulb.position.set(c + W.roadWidth / 2 + 1, 6.2, t);
-      group.add(bulb);
       lampSpots.push({ x: c + W.roadWidth / 2 + 1, z: t });
     }
+  }
+  function buildLampInstances() {
+    const n = lampSpots.length;
+    const dummy = new THREE.Object3D();
+    const poles = new THREE.InstancedMesh(
+      new THREE.CylinderGeometry(0.12, 0.16, 6, 6), lampMat, n,
+    );
+    const bulbs = new THREE.InstancedMesh(
+      new THREE.SphereGeometry(0.35, 8, 6), bulbMat, n,
+    );
+    poles.castShadow = true;
+    lampSpots.forEach((spot, i) => {
+      dummy.position.set(spot.x, 3, spot.z);
+      dummy.rotation.set(0, 0, 0);
+      dummy.scale.setScalar(1);
+      dummy.updateMatrix();
+      poles.setMatrixAt(i, dummy.matrix);
+      dummy.position.set(spot.x, 6.2, spot.z);
+      dummy.updateMatrix();
+      bulbs.setMatrixAt(i, dummy.matrix);
+    });
+    poles.instanceMatrix.needsUpdate = true;
+    bulbs.instanceMatrix.needsUpdate = true;
+    group.add(poles);
+    group.add(bulbs);
   }
 
   // v9 wet ground, part two: puddles and lamp light pools.
@@ -1899,13 +2082,274 @@ export function buildCity(scene, rng, cfg) {
   heli.add(rotor);
   const spot = new THREE.Mesh(
     new THREE.SphereGeometry(0.5, 8, 6),
-    new THREE.MeshBasicMaterial({ color: 0xfff6c8 }),
+    new THREE.MeshBasicMaterial({ color: new THREE.Color(2.0, 1.9, 1.3) }),
   );
   spot.position.set(0, -0.9, 1.2);
   heli.add(spot);
   heli.position.set(0, 64, 0);
   scene.add(heli);
   heli.userData.rotor = rotor;
+
+  // v9 iteration 4 — the money sinks and the beachfront, all fixed
+  // geometry (zero rng): the AMMU-NATION gun shop and the PAY 'N' SPRAY
+  // garage the player walks into, bus stops, neon billboards on the
+  // beachfront, sun loungers and surfboards on the sand, hanging lamps
+  // over the pier, bollards along the beach curb, three stunt ramps, and
+  // a pool of destructible props. Then the instanced builds for the
+  // palms, hydrants, benches, bins and street lamps recorded above.
+  const neonMat = (r, g, b) => new THREE.MeshBasicMaterial({ color: new THREE.Color(r, g, b) });
+  function shopBuilding(x, z, w, d, h, wallColor, signText, signColor) {
+    const b = box(w, h, d, wallColor, x, h / 2, z);
+    group.add(b);
+    const roof = box(w + 0.4, 0.3, d + 0.4, 0x2a2f38, x, h + 0.15, z);
+    group.add(roof);
+    // The sign faces west, toward the road the player walks in from.
+    const tex = signTexture(signText, '#0a0a12', '#ffffff');
+    const sign = new THREE.Mesh(
+      new THREE.PlaneGeometry(w * 0.9, 1.6),
+      new THREE.MeshBasicMaterial({ map: tex }),
+    );
+    sign.position.set(x - w / 2 - 0.15, h - 0.9, z);
+    sign.rotation.y = -Math.PI / 2;
+    group.add(sign);
+    const strip = new THREE.Mesh(
+      new THREE.BoxGeometry(0.1, 0.14, w * 0.92),
+      neonMat(signColor[0], signColor[1], signColor[2]),
+    );
+    strip.position.set(x - w / 2 - 0.15, h - 1.9, z);
+    group.add(strip);
+    return b;
+  }
+  shopBuilding(cfg.shops.gun.x, cfg.shops.gun.z, 10, 8, 5, 0x3a2f2a, 'AMMU-NATION', [2.2, 0.4, 1.6]);
+  shopBuilding(cfg.shops.spray.x, cfg.shops.spray.z, 12, 9, 5, 0x2a3a4a, "PAY 'N' SPRAY", [0.4, 2.0, 2.0]);
+
+  function busStop(x, z, face) {
+    const g = new THREE.Group();
+    const back = new THREE.Mesh(new THREE.BoxGeometry(4, 2.4, 0.15), cityMat(0x2a4a5a, 0.8));
+    back.position.set(0, 1.2, -0.9);
+    back.castShadow = true;
+    g.add(back);
+    const roof = new THREE.Mesh(new THREE.BoxGeometry(4.4, 0.15, 2.2), cityMat(0x3a3f45, 0.6, 0.5));
+    roof.position.set(0, 2.5, 0);
+    g.add(roof);
+    const seat = new THREE.Mesh(new THREE.BoxGeometry(3.6, 0.12, 0.5), benchMat);
+    seat.position.set(0, 0.5, -0.6);
+    g.add(seat);
+    g.position.set(x, 0, z);
+    g.rotation.y = face;
+    group.add(g);
+  }
+  busStop(-131.5, 60, -Math.PI / 2);
+  busStop(131.5, -56, Math.PI / 2);
+
+  function billboard(x, z, text, r, g, b) {
+    const grp = new THREE.Group();
+    for (const px of [-3, 3]) {
+      const post = new THREE.Mesh(new THREE.CylinderGeometry(0.18, 0.22, 7, 6), cityMat(0x3a3f45, 0.6, 0.5));
+      post.position.set(px, 3.5, 0);
+      grp.add(post);
+    }
+    const tex = signTexture(text, '#0a0a12', '#ffffff', 512);
+    // Two faces back to back: the board reads from the road AND the beach.
+    for (const side of [0, Math.PI]) {
+      const board = new THREE.Mesh(
+        new THREE.PlaneGeometry(9, 3),
+        new THREE.MeshBasicMaterial({ map: tex }),
+      );
+      board.position.set(0, 8.5, 0);
+      board.rotation.y = side;
+      board.translateZ(0.03);
+      grp.add(board);
+    }
+    for (const gy of [10.1, 6.9]) {
+      const glow = new THREE.Mesh(new THREE.BoxGeometry(9.2, 0.16, 0.12), neonMat(r, g, b));
+      glow.position.set(0, gy, 0.05);
+      grp.add(glow);
+    }
+    grp.position.set(x, 0, z);
+    grp.rotation.y = -Math.PI / 2;
+    group.add(grp);
+  }
+  billboard(152, -70, 'COSTA FUEGO', 2.2, 0.4, 1.6);
+  billboard(152, 42, 'FUEGO BANK', 0.4, 2.0, 2.0);
+
+  // Sun loungers on the sand, paired with the umbrellas already there.
+  const loungerMat = cityMat(0xe8e0d0, 0.9);
+  for (const lz of [-86, -74, -6, 6, 74, 86]) {
+    const frame = new THREE.Mesh(new THREE.BoxGeometry(2.2, 0.15, 0.8), loungerMat);
+    frame.position.set(158, 0.35, lz);
+    frame.castShadow = true;
+    group.add(frame);
+    const rest = new THREE.Mesh(new THREE.BoxGeometry(0.7, 0.12, 0.8), loungerMat);
+    rest.position.set(157.1, 0.55, lz);
+    rest.rotation.z = 0.5;
+    group.add(rest);
+  }
+  // Surfboards stuck upright in the sand.
+  const surfColors = [0xff5a5a, 0x5a8aff, 0xffd23e, 0x35e0e6];
+  [[156.5, 57], [160, 63], [152, -28], [152, 28]].forEach(([sx, sz], i) => {
+    const board = new THREE.Mesh(
+      new THREE.CapsuleGeometry(0.3, 1.6, 4, 8),
+      new THREE.MeshStandardMaterial({ color: surfColors[i], roughness: 0.5 }),
+    );
+    board.position.set(sx, 1.1, sz);
+    board.rotation.z = 0.35;
+    board.rotation.y = i * 0.8;
+    board.castShadow = true;
+    group.add(board);
+  });
+  // Hanging lamps over the pier entrance: a wire across the deck with
+  // five warm bulbs on cords.
+  {
+    const wire = new THREE.Mesh(new THREE.CylinderGeometry(0.03, 0.03, 40, 4), cityMat(0x1a1a1a, 0.9));
+    wire.rotation.z = Math.PI / 2;
+    wire.position.set(189, 3.2, 100);
+    group.add(wire);
+    for (let i = 0; i < 5; i += 1) {
+      const bx = 172 + i * 8.5;
+      const cord = new THREE.Mesh(new THREE.CylinderGeometry(0.02, 0.02, 0.45, 4), cityMat(0x1a1a1a, 0.9));
+      cord.position.set(bx, 2.98, 100);
+      group.add(cord);
+      const bulb = new THREE.Mesh(
+        new THREE.SphereGeometry(0.22, 8, 6),
+        new THREE.MeshBasicMaterial({ color: new THREE.Color(1.8, 1.5, 0.9) }),
+      );
+      bulb.position.set(bx, 2.75, 100);
+      group.add(bulb);
+    }
+  }
+  // Bollards along the beach curb: one InstancedMesh, 36 posts.
+  {
+    const spots = [];
+    for (let z = -140; z <= 140; z += 8) spots.push({ x: 149, z });
+    const im = new THREE.InstancedMesh(
+      new THREE.CylinderGeometry(0.18, 0.22, 0.9, 8),
+      cityMat(0xd8d8d8, 0.5, 0.3),
+      spots.length,
+    );
+    const dummy = new THREE.Object3D();
+    spots.forEach((sp, i) => {
+      dummy.position.set(sp.x, 0.45, sp.z);
+      dummy.rotation.set(0, 0, 0);
+      dummy.scale.setScalar(1);
+      dummy.updateMatrix();
+      im.setMatrixAt(i, dummy.matrix);
+    });
+    im.instanceMatrix.needsUpdate = true;
+    im.castShadow = true;
+    group.add(im);
+  }
+  // Stunt ramps: tilted slabs on the road shoulders, clear of junctions
+  // and mission lines. The axis is the launch direction — 'z' launches
+  // along the north-south roads, 'x' along the east-west ones.
+  const ramps = cfg.stunts.ramps.map((r, i) => {
+    const axis = i === 2 ? 'x' : 'z';
+    const ramp = new THREE.Mesh(
+      new THREE.BoxGeometry(5, 0.5, 4),
+      new THREE.MeshStandardMaterial({ color: 0xd8a832, roughness: 0.6 }),
+    );
+    ramp.position.set(r.x, 0.25, r.z);
+    if (axis === 'x') ramp.rotation.z = 0.35;
+    else ramp.rotation.x = -0.35;
+    ramp.castShadow = true;
+    group.add(ramp);
+    return { x: r.x, z: r.z, axis };
+  });
+  // Destructible props (v9 iteration 4): lamp posts, hydrants, trash
+  // cans, wooden fences and cafe tables the player can smash through
+  // while driving. Each is a Group pivoted at the ground so the game can
+  // tip it over (rotation) and respawn it later. 24 in total.
+  const destructibles = [];
+  function destructible(kind, x, z, build) {
+    const g = new THREE.Group();
+    build(g);
+    g.position.set(x, 0, z);
+    group.add(g);
+    destructibles.push({ kind, home: { x, z }, group: g, broken: false, timer: 0, fallT: 0 });
+    return g;
+  }
+  for (const lz of [-84, -28, 28, 84]) {
+    destructible('lamp', 144, lz, (g) => {
+      const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.12, 0.16, 6, 6), lampMat);
+      pole.position.y = 3;
+      pole.castShadow = true;
+      g.add(pole);
+      const bulb = new THREE.Mesh(
+        new THREE.SphereGeometry(0.35, 8, 6),
+        new THREE.MeshBasicMaterial({ color: new THREE.Color(1.6, 1.35, 0.75) }),
+      );
+      bulb.position.y = 6.2;
+      g.add(bulb);
+    });
+  }
+  for (const hz of [-112, -56, 56, 112]) {
+    destructible('hydrant', 146, hz, (g) => {
+      const body = new THREE.Mesh(new THREE.CylinderGeometry(0.22, 0.26, 0.7, 8), hydrantMat);
+      body.position.y = 0.35;
+      body.castShadow = true;
+      g.add(body);
+      const cap = new THREE.Mesh(new THREE.SphereGeometry(0.2, 8, 6), hydrantMat);
+      cap.position.y = 0.75;
+      g.add(cap);
+    });
+  }
+  for (const cz of [-100, -60, -20, 20, 60, 100]) {
+    destructible('can', 144, cz, (g) => {
+      const can = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.45, 0.4, 1.1, 10),
+        cityMat(0x2a4a3a, 0.8, 0.3),
+      );
+      can.position.y = 0.55;
+      can.castShadow = true;
+      g.add(can);
+    });
+  }
+  for (const fz of [-120, -80, -40, 40, 80, 120]) {
+    destructible('fence', 146, fz, (g) => {
+      const wood = cityMat(0x8a6a42, 0.9);
+      for (const px of [-1.2, 1.2]) {
+        const post = new THREE.Mesh(new THREE.BoxGeometry(0.15, 1.2, 0.15), wood);
+        post.position.set(px, 0.6, 0);
+        post.castShadow = true;
+        g.add(post);
+      }
+      for (const ry of [0.5, 0.95]) {
+        const rail = new THREE.Mesh(new THREE.BoxGeometry(2.7, 0.12, 0.08), wood);
+        rail.position.set(0, ry, 0);
+        g.add(rail);
+      }
+    });
+  }
+  for (const [tx, tz] of [[46, -10], [46, 10], [66, -10], [66, 10]]) {
+    destructible('table', tx, tz, (g) => {
+      const top = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.9, 0.9, 0.08, 12),
+        cityMat(0xd8d8d8, 0.5, 0.3),
+      );
+      top.position.y = 0.75;
+      top.castShadow = true;
+      g.add(top);
+      const leg = new THREE.Mesh(new THREE.CylinderGeometry(0.08, 0.12, 0.75, 6), lampMat);
+      leg.position.y = 0.38;
+      g.add(leg);
+    });
+  }
+
+  // Instanced builds for the recorded props (v9 iteration 4).
+  buildPalmInstances();
+  buildHydrantInstances();
+  buildBenchInstances();
+  buildBinInstances();
+  buildLampInstances();
+
+  function updateWind(time) {
+    windUniform.value = time;
+  }
+  function updateSea(time, sunDir, sunColor) {
+    seaUniforms.uTime.value = time;
+    seaUniforms.uSunDir.value.copy(sunDir);
+    seaUniforms.uSunColor.value.copy(sunColor);
+  }
 
   // Two seasons (v9 iteration 3): MUSIM HUJAN (odd days) keeps the rain,
   // puddles, lamp pools and wet-street shine; MUSIM KEMARAU (even days)
@@ -1915,12 +2359,28 @@ export function buildCity(scene, rng, cfg) {
   function setSeason(rainy) {
     if (puddleMesh) puddleMesh.visible = rainy;
     if (poolMesh) poolMesh.visible = rainy;
-    wetRoadMat.roughness = rainy ? 0.35 : 0.92;
+    // v9 iteration 4: wet asphalt reads 0.28 with the PMREM environment
+    // map (the brief's 0.25-0.35 wet band); dry streets stay rough.
+    wetRoadMat.roughness = rainy ? 0.28 : 0.92;
     wetRoadMat.metalness = rainy ? 0.25 : 0.02;
     wetGroundMat.roughness = rainy ? 0.45 : 0.95;
     wetWalkMat.roughness = rainy ? 0.55 : 0.95;
     wetApronMat.roughness = rainy ? 0.5 : 0.9;
   }
 
-  return { group, roadLines, blockCenters, landmarks, half, pitch, streetlights, heli, lightHeads, stallSpots, barrels, buildingCount: buildingRecords.length, setSeason };
+  return {
+    group, roadLines, blockCenters, landmarks, half, pitch, streetlights, heli,
+    lightHeads, stallSpots, barrels, buildingCount: buildingRecords.length, setSeason,
+    // v9 iteration 4: destructible props, stunt ramps, instanced counts,
+    // and the wind/sea updaters for the day cycle.
+    destructibles, ramps, updateWind, updateSea,
+    instancedCounts: {
+      palms: palmSpots.length,
+      lamps: lampSpots.length,
+      hydrants: hydrantSpots.length,
+      benches: benchSpots.length,
+      bins: binSpots.length,
+      bollards: 36,
+    },
+  };
 }

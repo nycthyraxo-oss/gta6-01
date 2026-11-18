@@ -5,9 +5,18 @@
 // Playa Dub) with their own note sets and tempos — Q cycles them, and the
 // HUD speedo shows the station actually playing. Picking up a hidden
 // package gets its own little chime.
+//
+// v9 iteration 4: spatial audio. The police siren is a THREE.PositionalAudio
+// that rides on the nearest cruiser (it gets louder as the cops close in),
+// NPC gunfire and explosions are one-shot positional bursts at their real
+// positions, and the engine synth follows speed + Shift boost. The radio
+// gains 102.4 REEF BEATS (hip-hop/drill, slow low steps) and a RADIO OFF
+// state — Q cycles five states, with a static tuning blip on every switch
+// — and the music ducks to 35% while Marla is talking (dialogue ducking).
+import * as THREE from 'three';
 import { RADIO_STATIONS } from './config.js';
 
-export function createAudio() {
+export function createAudio(camera, scene) {
   let ctx = null;
   let master = null;
   let engineOsc = null;
@@ -18,6 +27,20 @@ export function createAudio() {
   let musicTimer = 0;
   let musicStep = 0;
   let station = 0;
+  let radioOff = false;
+  let ducking = false;
+  // Positional audio (v9 iteration 4): one listener on the camera, one
+  // looping siren that follows the nearest police car, and a pool of
+  // three one-shot positional sources for NPC gunfire / explosions.
+  let listener = null;
+  let sirenPos = null;
+  let sirenAnchor = null;
+  let sirenBuf = null;
+  let shotBuf = null;
+  let blastBuf = null;
+  const oneShots = [];
+  let oneShotNext = 0;
+  let positionalCount = 0;
 
   function stationDef() {
     return RADIO_STATIONS[station % RADIO_STATIONS.length];
@@ -54,7 +77,65 @@ export function createAudio() {
     return true;
   }
 
-  function blip(freq, dur, type, vol, slideTo) {
+  // Synthesized buffers, built once: a 2.5 s siren sweep loop, a 0.14 s
+  // gunshot crack and a 0.7 s explosion rumble. Pure math, no assets.
+  function buildBuffers() {
+    if (sirenBuf) return;
+    const sr = ctx.sampleRate;
+    const sl = Math.floor(sr * 2.5);
+    sirenBuf = ctx.createBuffer(1, sl, sr);
+    const sd = sirenBuf.getChannelData(0);
+    for (let i = 0; i < sl; i += 1) {
+      const t = i / sr;
+      const f = 650 + 250 * Math.sin(t * 5);
+      sd[i] = Math.sin(2 * Math.PI * f * t) * 0.5;
+    }
+    const hl = Math.floor(sr * 0.14);
+    shotBuf = ctx.createBuffer(1, hl, sr);
+    const hd = shotBuf.getChannelData(0);
+    for (let i = 0; i < hl; i += 1) hd[i] = (Math.random() * 2 - 1) * (1 - i / hl);
+    const bl = Math.floor(sr * 0.7);
+    blastBuf = ctx.createBuffer(1, bl, sr);
+    const bd = blastBuf.getChannelData(0);
+    for (let i = 0; i < bl; i += 1) bd[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / bl, 2);
+  }
+
+  function ensurePositional() {
+    if (listener) return true;
+    if (!ensure() || !camera || !scene) return false;
+    try {
+      listener = new THREE.AudioListener();
+      camera.add(listener);
+      sirenAnchor = new THREE.Object3D();
+      scene.add(sirenAnchor);
+      sirenPos = new THREE.PositionalAudio(listener);
+      buildBuffers();
+      sirenPos.setBuffer(sirenBuf);
+      sirenPos.setLoop(true);
+      sirenPos.setRefDistance(12);
+      sirenPos.setMaxDistance(120);
+      sirenPos.setRolloffFactor(1.2);
+      sirenAnchor.add(sirenPos);
+      positionalCount += 1;
+      for (let i = 0; i < 3; i += 1) {
+        const anchor = new THREE.Object3D();
+        scene.add(anchor);
+        const src = new THREE.PositionalAudio(listener);
+        src.setRefDistance(8);
+        src.setMaxDistance(90);
+        src.setRolloffFactor(1.4);
+        anchor.add(src);
+        oneShots.push({ anchor, src });
+        positionalCount += 1;
+      }
+    } catch {
+      listener = null;
+      return false;
+    }
+    return true;
+  }
+
+  function blip(freq, dur, type, vol, slideTo, duck) {
     if (!ensure() || muted) return;
     try {
       if (ctx.state === 'suspended') void ctx.resume();
@@ -63,7 +144,7 @@ export function createAudio() {
       osc.frequency.setValueAtTime(Math.max(20, freq), ctx.currentTime);
       if (slideTo) osc.frequency.exponentialRampToValueAtTime(Math.max(20, slideTo), ctx.currentTime + dur);
       const g = ctx.createGain();
-      g.gain.setValueAtTime(vol || 0.2, ctx.currentTime);
+      g.gain.setValueAtTime((vol || 0.2) * (duck && ducking ? 0.35 : 1), ctx.currentTime);
       g.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + dur);
       osc.connect(g);
       g.connect(master);
@@ -132,13 +213,18 @@ export function createAudio() {
     click() {
       blip(880, 0.05, 'sine', 0.15);
     },
-    setEngine(speed01, driving) {
+    // Engine synth (v9 iteration 4): pitch follows speed, and Shift boost
+    // adds 45 Hz plus a little more gain — the engine strains audibly.
+    setEngine(speed01, driving, boost) {
       if (!ctx || !engineOsc || !engineGain) return;
-      const f = 55 + 140 * Math.max(0, Math.min(1, speed01));
+      const f = 55 + 140 * Math.max(0, Math.min(1, speed01)) + (boost ? 45 : 0);
       const safeF = Number.isFinite(f) ? f : 55;
       try {
         engineOsc.frequency.setTargetAtTime(safeF, ctx.currentTime, 0.05);
-        engineGain.gain.setTargetAtTime(driving && !muted ? 0.05 + 0.05 * speed01 : 0, ctx.currentTime, 0.1);
+        engineGain.gain.setTargetAtTime(
+          driving && !muted ? 0.05 + 0.05 * speed01 + (boost ? 0.02 : 0) : 0,
+          ctx.currentTime, 0.1,
+        );
       } catch {
         // Guarded: a bad audio parameter must never kill the frame loop.
       }
@@ -153,25 +239,82 @@ export function createAudio() {
         // Guarded: a bad audio parameter must never kill the frame loop.
       }
     },
+    // Positional siren (v9 iteration 4): the loop rides on the nearest
+    // cruiser, so it swells as the cops close in and fades as you lose
+    // them. Returns false when positional audio is unavailable — the
+    // caller falls back to the global setSiren above.
+    setSirenPositional(on, x, y, z) {
+      if (!ensurePositional()) return false;
+      try {
+        if (ctx.state === 'suspended') void ctx.resume();
+        sirenAnchor.position.set(x, y, z);
+        if (on && !muted) {
+          if (!sirenPos.isPlaying) sirenPos.play();
+          sirenPos.setVolume(0.6);
+        } else if (sirenPos.isPlaying) {
+          sirenPos.pause();
+        }
+      } catch {
+        return false;
+      }
+      return true;
+    },
+    // One-shot positional burst at a real position: NPC gunfire ('shot')
+    // or an explosion ('blast'). Round-robins a pool of three sources.
+    positionalShot(x, y, z, kind) {
+      if (!ensurePositional()) return false;
+      try {
+        if (ctx.state === 'suspended') void ctx.resume();
+        const slot = oneShots[oneShotNext];
+        oneShotNext = (oneShotNext + 1) % oneShots.length;
+        if (slot.src.isPlaying) slot.src.stop();
+        slot.src.setBuffer(kind === 'blast' ? blastBuf : shotBuf);
+        slot.src.setVolume(kind === 'blast' ? 0.9 : 0.7);
+        slot.anchor.position.set(x, y, z);
+        slot.src.play();
+      } catch {
+        return false;
+      }
+      return true;
+    },
+    positionalCount() {
+      return positionalCount;
+    },
+    // Dialogue ducking (v9 iteration 4): while Marla is talking, the
+    // radio drops to 35% so the line is readable.
+    setDucking(v) {
+      ducking = !!v;
+    },
+    isDucking() {
+      return ducking;
+    },
     music(dt) {
-      if (!ctx || muted) return;
+      if (!ctx || muted || radioOff) return;
       musicTimer -= dt;
       if (musicTimer > 0) return;
       const def = stationDef();
       musicTimer = def.step;
       const n = def.notes[musicStep % def.notes.length];
       musicStep += 1;
-      blip(n, 0.4, 'triangle', 0.06);
-      if (musicStep % 4 === 0) blip(n / 2, 0.5, 'sine', 0.08);
+      blip(n, 0.4, 'triangle', 0.06, undefined, true);
+      if (musicStep % 4 === 0) blip(n / 2, 0.5, 'sine', 0.08, undefined, true);
     },
     nextStation() {
-      station = (station + 1) % RADIO_STATIONS.length;
+      // Five states: the four stations, then RADIO OFF, then back.
+      station = (station + 1) % (RADIO_STATIONS.length + 1);
+      radioOff = station === RADIO_STATIONS.length;
       musicStep = 0;
       musicTimer = 0;
-      return stationDef().name;
+      // Static tuning blip on every switch.
+      noiseBurst(0.18, 0.2);
+      blip(1200, 0.08, 'square', 0.12, 300);
+      return this.stationName();
     },
     stationName() {
-      return stationDef().name;
+      return radioOff ? 'RADIO OFF' : stationDef().name;
+    },
+    isRadioOff() {
+      return radioOff;
     },
   };
 }

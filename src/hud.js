@@ -31,6 +31,10 @@ export function createHud() {
   const weaponEl = document.getElementById('hud-weapon');
   const weapon2El = document.getElementById('hud-weapon2');
   const weapon3El = document.getElementById('hud-weapon3');
+  const weapon4El = document.getElementById('hud-weapon4');
+  const weapon5El = document.getElementById('hud-weapon5');
+  const weapon6El = document.getElementById('hud-weapon6');
+  const autosaveEl = document.getElementById('hud-autosave');
   const pursuersEl = document.getElementById('hud-pursuers');
   const districtEl = document.getElementById('hud-district-name');
   const healthFill = document.getElementById('hud-healthfill');
@@ -55,7 +59,36 @@ export function createHud() {
   const mapCtx = minimap.getContext('2d');
   const bigmap = document.getElementById('bigmap');
   const bigCtx = bigmap ? bigmap.getContext('2d') : null;
+  // v9 iteration 4: DPR calibration. The canvases are backed at
+  // devicePixelRatio (capped at 2) so the minimap and the big map stay
+  // sharp on hidpi screens; the CSS display sizes stay 200 and 640, and
+  // the draw code works in those logical sizes with a dpr transform.
+  const dpr = Math.min(window.devicePixelRatio || 1, 2);
+  minimap.width = 200 * dpr;
+  minimap.height = 200 * dpr;
+  if (bigmap) {
+    bigmap.width = 640 * dpr;
+    bigmap.height = 640 * dpr;
+  }
   let messageTimer = 0;
+  let autosaveTimer = 0;
+
+  // "DAY 1 · 18:24" for the HUD clock and for time-skip messages — one
+  // formatter, so the two can never drift apart.
+  function clockText(hour, day) {
+    const h = Math.floor(hour);
+    const m = Math.floor((hour - h) * 60);
+    return `DAY ${day || 1} · ${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
+  }
+
+  // Autosave indicator (v9 iteration 4): a brief "SAVED" under the
+  // clock after every autosave, so the player sees the save land.
+  function showAutosave(text) {
+    if (!autosaveEl) return;
+    autosaveEl.textContent = text;
+    autosaveEl.style.opacity = '1';
+    autosaveTimer = 2;
+  }
 
   function showMessage(text, seconds) {
     messageEl.textContent = text;
@@ -74,10 +107,8 @@ export function createHud() {
     if (stageEl) stageEl.textContent = state.stage || '';
     objectiveEl.textContent = state.objective;
     distEl.textContent = state.targetDist != null ? `${Math.round(state.targetDist)} m` : '';
-    const h = Math.floor(state.clockHour);
-    const m = Math.floor((state.clockHour - h) * 60);
     const season = state.season ? ` · ${state.season}` : '';
-    clockEl.textContent = `DAY ${state.day || 1} · ${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}${season}`;
+    clockEl.textContent = `${clockText(state.clockHour, state.day)}${season}`;
     if (progressEl) progressEl.style.width = `${Math.round((state.progress || 0) * 100)}%`;
     if (nextEl) {
       nextEl.textContent = state.nextMission ? `NEXT: ${state.nextMission}` : '';
@@ -95,14 +126,20 @@ export function createHud() {
     starsEl.textContent = stars;
     starsEl.style.color = state.stars > 0 ? '#ffd23e' : '#9aa0aa';
     cashEl.textContent = `$${Math.round(state.cash).toLocaleString('en-US')}`;
-    // Weapon slots: the pistol and the knife never run dry (the ∞ is
-    // honest), the bazooka is limited rockets. The active slot carries
-    // the ◄ marker so the player always knows what is in hand.
+    // Weapon slots (v9 iteration 4): the pistol is limited ammo now
+    // (bought at Ammu-Nation), the knife never runs dry, the bazooka is
+    // limited rockets, and slots 4-6 are the shop weapons — their ammo
+    // when owned, the REP lock when not. The active slot carries the ◄
+    // marker so the player always knows what is in hand.
     const w = state.weapon || 0;
     const rockets = state.rockets != null ? state.rockets : 8;
-    weaponEl.textContent = `1 · PISTOL ∞${w === 0 ? ' ◄' : ''}`;
+    const owned = state.owned || {};
+    weaponEl.textContent = `1 · PISTOL ${state.ammo != null ? state.ammo : 24}${w === 0 ? ' ◄' : ''}`;
     if (weapon2El) weapon2El.textContent = `2 · KNIFE ∞${w === 1 ? ' ◄' : ''}`;
     if (weapon3El) weapon3El.textContent = `3 · BAZOOKA ${rockets}${w === 2 ? ' ◄' : ''}`;
+    if (weapon4El) weapon4El.textContent = owned.smg ? `4 · SMG ${state.smgAmmo != null ? state.smgAmmo : 0}${w === 3 ? ' ◄' : ''}` : '4 · SMG — LOCKED (REP 20)';
+    if (weapon5El) weapon5El.textContent = owned.shotgun ? `5 · SHOTGUN ${state.shotgunAmmo != null ? state.shotgunAmmo : 0}${w === 4 ? ' ◄' : ''}` : '5 · SHOTGUN — LOCKED (REP 40)';
+    if (weapon6El) weapon6El.textContent = owned.rifle ? `6 · RIFLE ${state.rifleAmmo != null ? state.rifleAmmo : 0}${w === 5 ? ' ◄' : ''}` : '6 · RIFLE — LOCKED (REP 60)';
     if (pursuersEl) {
       const list = state.pursuers || [];
       if (list.length > 0) {
@@ -173,13 +210,15 @@ export function createHud() {
     }
 
     // Spotlight banner: the heli has its beam on you — break line of
-    // sight, because the heat will not cool while it does.
+    // sight, because the heat will not cool while it does. v9 iteration
+    // 4: standing in a police vision cone shows the same banner.
     if (spotlightEl) {
-      spotlightEl.style.display = state.spotlight ? 'block' : 'none';
+      spotlightEl.style.display = state.spotlight || state.inVisionCone ? 'block' : 'none';
     }
 
     // Crosshair on foot: the player aims with the mouse, so the aim point
-    // is always visible. Hidden in a car (drive-by shooting uses the car).
+    // is always visible. v9 iteration 4: it also shows in a car while
+    // the player is aiming (drive-by).
     if (crosshairEl) crosshairEl.style.display = state.crosshair ? 'block' : 'none';
 
     if (messageTimer > 0) {
@@ -187,6 +226,11 @@ export function createHud() {
       if (messageTimer <= 0) messageEl.style.opacity = '0';
     }
     if (!messageEl.textContent.trim()) messageEl.style.opacity = '0';
+    // Autosave indicator fades 2 s after the save lands.
+    if (autosaveTimer > 0) {
+      autosaveTimer -= state.dt;
+      if (autosaveTimer <= 0 && autosaveEl) autosaveEl.style.opacity = '0';
+    }
     root.style.display = state.visible ? 'block' : 'none';
   }
 
@@ -240,9 +284,57 @@ export function createHud() {
     ctx.setLineDash([]);
   }
 
+  // Police vision cones (v9 iteration 4): a translucent triangle 20 m
+  // ahead of each cruiser, widening to 6 m at the far end — the same
+  // geometry the 3D cones use, so the map and the world agree.
+  function drawVisionCones(ctx, toMap, world, size) {
+    const scale = size / ((world.half + 20) * 2);
+    for (const car of world.policeCars || []) {
+      const [mx, mz] = toMap(car.group.position.x, car.group.position.z);
+      ctx.save();
+      ctx.translate(mx, mz);
+      ctx.rotate(car.heading);
+      ctx.fillStyle = 'rgba(255, 210, 62, 0.18)';
+      ctx.beginPath();
+      ctx.moveTo(0, 0);
+      ctx.lineTo(-6 * scale, 20 * scale);
+      ctx.lineTo(6 * scale, 20 * scale);
+      ctx.closePath();
+      ctx.fill();
+      ctx.restore();
+    }
+  }
+
+  // Shops (v9 iteration 4): diamonds — lime for Ammu-Nation, magenta
+  // for Pay 'n' Spray. The big map labels them too.
+  function drawShops(ctx, toMap, world, label) {
+    if (!world.shops) return;
+    const defs = [
+      { s: world.shops.gun, color: '#8aff5a', name: 'AMMU-NATION' },
+      { s: world.shops.spray, color: '#ff5aff', name: "PAY 'N' SPRAY" },
+    ];
+    for (const { s, color, name } of defs) {
+      const [mx, mz] = toMap(s.x, s.z);
+      ctx.fillStyle = color;
+      ctx.beginPath();
+      ctx.moveTo(mx, mz - 5);
+      ctx.lineTo(mx + 5, mz);
+      ctx.lineTo(mx, mz + 5);
+      ctx.lineTo(mx - 5, mz);
+      ctx.closePath();
+      ctx.fill();
+      if (label) {
+        ctx.fillStyle = color;
+        ctx.font = 'bold 13px system-ui, sans-serif';
+        ctx.fillText(name, mx + 8, mz + 4);
+      }
+    }
+  }
+
   function drawMinimap(world) {
-    const size = minimap.width;
+    const size = 200;
     const ctx = mapCtx;
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     const toMap = drawMapBase(ctx, size, world);
     // Police search zone: the circle the heat cools outside of.
     if (world.searchZone) {
@@ -300,6 +392,8 @@ export function createHud() {
       ctx.arc(mx, mz, 3.5, 0, Math.PI * 2);
       ctx.fill();
     }
+    drawVisionCones(ctx, toMap, world, size);
+    drawShops(ctx, toMap, world, false);
     // Player arrow.
     const [px, pz] = toMap(world.playerX, world.playerZ);
     ctx.save();
@@ -327,8 +421,9 @@ export function createHud() {
   // names, named venues, the GPS route, the current job and a legend.
   function drawBigMap(world) {
     if (!bigCtx) return;
-    const size = bigmap.width;
+    const size = 640;
     const ctx = bigCtx;
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     const toMap = drawMapBase(ctx, size, world);
     if (world.searchZone) {
       const [zx, zy] = toMap(world.searchZone.x, world.searchZone.z);
@@ -414,6 +509,8 @@ export function createHud() {
       ctx.closePath();
       ctx.fill();
     }
+    drawVisionCones(ctx, toMap, world, size);
+    drawShops(ctx, toMap, world, true);
     // Player arrow.
     const [px, pz] = toMap(world.playerX, world.playerZ);
     ctx.save();
@@ -446,5 +543,5 @@ export function createHud() {
     ctx.fillText('— GPS route', 290, size - 26);
   }
 
-  return { update, drawMinimap, drawBigMap, showMessage };
+  return { update, drawMinimap, drawBigMap, showMessage, showAutosave, clockText };
 }
