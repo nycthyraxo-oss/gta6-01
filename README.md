@@ -55,16 +55,33 @@ drive the boardwalk at dusk.
   Cars take damage now: crashes and police rams lower the condition, and a
   battered car runs slower — the speedo shows the condition, and a respray
   at Taller Marla fixes it up.
-- **Traffic and pedestrians:** 14 AI cars cruising the road grid, 26
-  pedestrians on the sidewalks who flee gunfire, and vendors at the mercado.
+- **Traffic and pedestrians:** 22 AI cars cruising the road grid — they
+  brake for cars and pedestrians ahead, turn at junctions, and stop at
+  red lights (yellow means stop if there is room) — plus 26 pedestrians
+  on the sidewalks who flee gunfire, and vendors at the mercado.
+- **Memory:** cars are built from shared cached geometry and materials,
+  so a long session does not grow VRAM: whenever a car leaves the scene
+  (a V spawn evicts the oldest car, a respray rebuilds the paint, the
+  police stand down) its per-instance resources — light materials, the
+  van's checker band, the cabrio's windshield, the Interceptor's livery
+  and light bar — are disposed first. The shared caches are never freed,
+  so the other cars are untouched.
 - **Wanted level and police:** 0–5 stars. Stealing, hitting people or cars,
-  and shooting raise heat. Police cars chase and ram; on foot, officers
-  close in and arrest. Break line of sight and get far away and the stars
-  cool off one at a time. At 4 stars the helicopter leaves its patrol
-  circle, hovers over you and pins you in its searchlight — while the beam
-  is on you the heat will not cool, and the HUD says so. The pursuer panel
-  names every chaser, its distance and what it is doing: RAMMING, CHASING,
-  SEARCHING, ARRESTING, SPOTLIGHT ON YOU.
+  and shooting raise heat. One shot is 1 star, and 1 star is not a death
+  sentence: the police spawn at once but hold for a 4-second grace window
+  (the HUD warns you), then escalate by star — 1★ OBSERVE (patrol the
+  roads, no chase, no ram, no arrest), 2★ FOLLOW (chase at 0.6×, hold a
+  12-unit standoff, no ram, no arrest, one officer who holds at 6),
+  3★ PURSUE (chase 0.85×, ramming on, roadblocks, two officers, arrest
+  2.5 s), 4★ AGGRESSIVE (chase 1.0×, ramming on, helicopter, three
+  officers, arrest 2.0 s), 5★ MAXIMUM (chase 1.15×, ramming on, heli,
+  roadblocks, three officers, arrest 1.5 s). Break line of sight and get
+  far away and the stars cool off one at a time. At 4 stars the helicopter
+  leaves its patrol circle, hovers over you and pins you in its
+  searchlight — while the beam is on you the heat will not cool, and the
+  HUD says so. The pursuer panel names every chaser, its distance and
+  what it is doing: RESPONDING, PATROLLING, FOLLOWING, RAMMING, CHASING,
+  SEARCHING, HOLDING, ARRESTING, SPOTLIGHT ON YOU.
 - **Missions and story:** six jobs for Marla Quinn with briefings,
   objective markers, a beacon, minimap blips and timers where they fit:
   Homecoming, Hot Wheels, The Drop, Heat, Payback (four armed Reef Kings at
@@ -138,9 +155,10 @@ node serve.ts --port 8081
 | WASD | Move / drive |
 | Shift | Run / boost |
 | E | Enter or exit a car |
-| Space | Brake / handbrake |
+| Space | Jump (on foot) / brake, handbrake (in a car) |
+| 1 / 2 / 3 | Switch weapon: pistol (∞) / knife (∞) / bazooka (8 rockets) |
 | Mouse drag | Camera |
-| F or click | Shoot |
+| F or click | Shoot / swing the knife / fire a rocket |
 | Enter | Start game from the title screen |
 | M | City map |
 | Q | Radio (next station) |
@@ -190,8 +208,8 @@ main.ts                 the entry program: copies game/ + screenshots/ to
 - **Play-test** (headless Chrome over CDP, real keyboard/mouse input,
   18 Nov 2026): 37/37 passed — title → start, WASD walking, mission 1
   completes live with $300 (cash $450) and mission 2 starts, E steals a
-  parked car and wanted rises to 1 star with a cruiser in pursuit, driving
-  accelerates, E exits the car, roadblock spawns at 3 stars, searchlight
+  parked car and wanted rises to 1 star with a cruiser patrolling (1 star
+  observes, it does not chase), driving accelerates, E exits the car, roadblock spawns at 3 stars, searchlight
   helicopter activates at 4 stars and stands down when the heat clears,
   M opens the city map and closes it, P toggles pause both ways, autosave
   writes localStorage and Continue resumes the same mission and cash after
@@ -226,10 +244,11 @@ main.ts                 the entry program: copies game/ + screenshots/ to
 - **No multiplayer, no voice acting.** The story is told in briefing text
   and dialogue, not cutscenes. The radio is three synthesized station
   labels with different music, not real songs.
-- **Police AI is a chase, not a full pursuit system.** Officers ram and
-  arrest, roadblocks spawn at 3 stars, and the searchlight helicopter
-  chases at 4 stars — but there are no spike strips, and the helicopter
-  never shoots.
+- **Police AI escalates by star, it does not start at maximum.** 1 star
+  patrols and never rams or arrests, 2 stars follows at a distance,
+  ramming and arrest start at 3 stars, the searchlight helicopter chases
+  at 4 stars — but there are no spike strips, and the helicopter never
+  shoots.
 - **The helicopter reads through its searchlight, not its body.** At 4
   stars the heli flies at 55–64 m, above the third-person camera's upward
   tilt when near — in play you see its light cone, the ground pool and the

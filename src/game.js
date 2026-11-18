@@ -269,7 +269,7 @@ export function createGame(canvas, seed) {
     rainGeo.attributes.position.needsUpdate = true;
   }
   scatterRain();
-  // Two seasons (v9 iteration 3): MUSIM HUJAN on odd days, MUSIM KEMARAU
+  // Two seasons (v9 iteration 3): RAINY SEASON on odd days, DRY SEASON
   // on even days. A pure function of state.day — deterministic, no rng,
   // no clock. Rain, puddles, lamp pools and wet shine live only in the
   // rainy season; the dry season keeps the clear pink dusk. Applied
@@ -321,6 +321,21 @@ export function createGame(canvas, seed) {
       else if (x < cx - bx) x += bx * 2;
       if (z > cz + bz) z -= bz * 2;
       else if (z < cz - bz) z += bz * 2;
+      // v9 iteration 6: the toroidal wrap could drop a streak inside
+      // the 6 m dead zone (the respawn guard above only runs when a
+      // streak hits the ground). A wrapped streak inside 6 m is pushed
+      // out to exactly 6 m along its own direction, so the wrap never
+      // paints a streak across the camera.
+      {
+        const dx = x - cx;
+        const dz = z - cz;
+        const rd = Math.hypot(dx, dz);
+        if (rd < 6) {
+          const s = 6 / (rd || 1);
+          x = cx + dx * s;
+          z = cz + dz * s;
+        }
+      }
       rainPos[i * 3] = x;
       rainPos[i * 3 + 1] = y;
       rainPos[i * 3 + 2] = z;
@@ -476,7 +491,7 @@ export function createGame(canvas, seed) {
     // The outfit shop changes Rico's shirt colour (saved).
     shirtColor: 0x2a7a8c,
     // Ground height under the player (1.15 on the pier deck, the
-    // causeway and Pulau Fuego, 0 everywhere else) — see groundYAt.
+    // causeway and Fuego Island, 0 everywhere else) — see groundYAt.
     groundY: 0,
     // Distance driven / sprint time since the last skill XP (Driving
     // earns 1 XP per 100 m, Stamina 1 XP per 10 s of sprinting).
@@ -583,11 +598,31 @@ export function createGame(canvas, seed) {
   }
 
   // Mission beacon: a tall glowing pillar over the current target.
+  // v9 iteration 6: the old beacon was a 60 m uniform cylinder — from
+  // the dialogue camera it filled the top of the frame as a pale
+  // vertical band (raycast-verified: the band IS this beacon, not the
+  // rain). The beacon is now a short tapered pillar: 16 m tall, 2.2 m
+  // at the base tapering to 0.9 m at the top, with a vertical alpha
+  // gradient (solid at the ground, fully transparent at the top), so it
+  // marks the target on the ground and never paints the sky. The ground
+  // ring is unchanged.
+  const beaconCanvas = document.createElement('canvas');
+  beaconCanvas.width = 1;
+  beaconCanvas.height = 64;
+  {
+    const bctx = beaconCanvas.getContext('2d');
+    const grad = bctx.createLinearGradient(0, 0, 0, 64);
+    grad.addColorStop(0, 'rgba(255,255,255,0)');
+    grad.addColorStop(1, 'rgba(255,255,255,0.55)');
+    bctx.fillStyle = grad;
+    bctx.fillRect(0, 0, 1, 64);
+  }
+  const beaconTex = new THREE.CanvasTexture(beaconCanvas);
   const beacon = new THREE.Mesh(
-    new THREE.CylinderGeometry(2.2, 2.2, 60, 12, 1, true),
-    new THREE.MeshBasicMaterial({ color: 0xffd23e, transparent: true, opacity: 0.35, side: THREE.DoubleSide, depthWrite: false }),
+    new THREE.CylinderGeometry(0.9, 2.2, 16, 12, 1, true),
+    new THREE.MeshBasicMaterial({ color: 0xffd23e, map: beaconTex, transparent: true, side: THREE.DoubleSide, depthWrite: false }),
   );
-  beacon.position.set(city.landmarks.garage.x, 30, city.landmarks.garage.z);
+  beacon.position.set(city.landmarks.garage.x, 8, city.landmarks.garage.z);
   scene.add(beacon);
   const beaconRing = new THREE.Mesh(
     new THREE.RingGeometry(3, 5, 24),
@@ -661,7 +696,10 @@ export function createGame(canvas, seed) {
   parkCar(84, 44, Math.PI / 2, 0xe8c832);
   parkCar(-28, -84, Math.PI, 0x3aa655);
   parkCar(112, -28, Math.PI / 2, 0xd8d8d8);
-  parkCar(-56, 112, 0, 0x22262c);
+  // v9 iteration 6: was 0x22262c (near-black) — in the dusk shot it
+  // read as a black box with no edges. Steel blue-grey now, and the
+  // side marker lights (vehicles.js) keep it readable after dark.
+  parkCar(-56, 112, 0, 0x3a4a5a);
   parkCar(56, 100, Math.PI, 0x8a5fc2);
   const coupe = parkCar(city.landmarks.marina.x - 6, city.landmarks.marina.z, Math.PI / 2, 0xe07828);
   coupe.isTarget = true;
@@ -1063,7 +1101,7 @@ export function createGame(canvas, seed) {
       if (Math.abs(x - c) < half || Math.abs(z - c) < half) return true;
     }
     // v9 iteration 5 (§3): the sand track from the x=140 road to the
-    // pier (z 98-102), the pier deck + causeway, and Pulau Fuego are
+    // pier (z 98-102), the pier deck + causeway, and Fuego Island are
     // drivable — the car can actually drive to the island.
     if (x >= 140 && x <= 222 && z >= 98 && z <= 102) return true;
     const isl = cfg.island;
@@ -1072,7 +1110,7 @@ export function createGame(canvas, seed) {
   }
 
   // Ground height (v9 iteration 5, §3): 1.15 on the pier deck, the
-  // causeway and Pulau Fuego (all at the pier-deck height), 0 everywhere
+  // causeway and Fuego Island (all at the pier-deck height), 0 everywhere
   // else. The player, their car and the traffic all ride it, so nobody
   // sinks through the deck or floats above the sand.
   function groundYAt(x, z) {
@@ -2355,7 +2393,7 @@ export function createGame(canvas, seed) {
       racesWon,
       stunts,
       // Two seasons (v9 iteration 3): odd days rain, even days dry.
-      season: state.day % 2 === 1 ? 'MUSIM HUJAN' : 'MUSIM KEMARAU',
+      season: state.day % 2 === 1 ? 'RAINY SEASON' : 'DRY SEASON',
       // v9 iteration 5 (§2/§3/§5): weekday (day 1 is Friday, like the
       // story's first day), the street underfoot, the REP rank + progress
       // to the next rank, medals, skill levels, the active delivery and
@@ -3198,7 +3236,7 @@ export function createGame(canvas, seed) {
     // Beacon follows the current target.
     const target = currentTarget(missions);
     if (target && missions.state === 'active') {
-      beacon.position.set(target.x, 30, target.z);
+      beacon.position.set(target.x, 8, target.z);
       beaconRing.position.set(target.x, 0.1, target.z);
       beacon.visible = true;
       beaconRing.visible = true;
@@ -3510,7 +3548,7 @@ export function createGame(canvas, seed) {
       // dialogue bar with her portrait, the garage beacon ahead, and the
       // spawn clear of buildings (the spawn-wall fix). Staged tighter and
       // lower than before, so the frame holds the garage front (with its
-      // TALLER MARLA board), the street, a parked car, pedestrians and the
+      // MARLA'S GARAGE board), the street, a parked car, pedestrians and the
       // new spawn props — not a flat wall and not an empty lot.
       playerMesh.position.set(-104, 0, 52);
       player.heading = Math.atan2(-112 - -104, 84 - 52);
@@ -3603,6 +3641,50 @@ export function createGame(canvas, seed) {
     // code reads them.
     debug: {
       playerPos: () => ({ x: playerMesh.position.x, y: playerMesh.position.y, z: playerMesh.position.z }),
+      // v9 iteration 6: raycast from a screen pixel into the scene —
+      // identifies exactly which mesh a visual artefact is, so a fix
+      // targets the real object instead of a guess. Meshes only (rain
+      // Points and sprites are skipped); the 3 nearest hits carry
+      // material + size, so a distant tower and a near prop are told
+      // apart by distance. The sky dome (ShaderMaterial, no colour) is
+      // the tell for "the ray hit nothing but sky".
+      raycastScreen: (sx, sy) => {
+        const ray = new THREE.Raycaster();
+        const ndc = new THREE.Vector2(
+          (sx / window.innerWidth) * 2 - 1,
+          -((sy / window.innerHeight) * 2 - 1),
+        );
+        ray.setFromCamera(ndc, camera);
+        const hits = ray.intersectObjects(scene.children, true)
+          .filter((h) => h.object.isMesh && h.object.visible)
+          .slice(0, 3)
+          .map((h) => {
+            const o = h.object;
+            const mats = [].concat(o.material || []);
+            const m0 = mats[0] || {};
+            const bb = new THREE.Box3().setFromObject(o);
+            const size = new THREE.Vector3();
+            bb.getSize(size);
+            return {
+              dist: Math.round(h.distance * 10) / 10,
+              type: o.geometry ? o.geometry.type : o.type,
+              pos: { x: Math.round(o.position.x * 10) / 10, y: Math.round(o.position.y * 10) / 10, z: Math.round(o.position.z * 10) / 10 },
+              size: { x: Math.round(size.x * 10) / 10, y: Math.round(size.y * 10) / 10, z: Math.round(size.z * 10) / 10 },
+              color: m0.color ? `#${m0.color.getHexString()}` : null,
+              emissive: m0.emissive ? `#${m0.emissive.getHexString()}` : null,
+              emissiveIntensity: m0.emissiveIntensity ?? null,
+              hasMap: !!(m0.map),
+            };
+          });
+        return {
+          cam: { x: Math.round(camera.position.x * 10) / 10, y: Math.round(camera.position.y * 10) / 10, z: Math.round(camera.position.z * 10) / 10 },
+          hits,
+        };
+      },
+      // v9 iteration 6: the city placement audit — road overlaps for
+      // buildings / palms / trees / hydrants / bins / stalls, sign-pole
+      // occlusion and ramp ground contact, all from the real layout.
+      placementAudit: () => city.placementAudit(),
       camYaw: () => state.camYaw,
       setCamYaw: (v) => { state.camYaw = v; },
       playerState: () => ({
@@ -3674,7 +3756,7 @@ export function createGame(canvas, seed) {
         return 0;
       },
       buildingCount: () => city.buildingCount,
-      season: () => (state.day % 2 === 1 ? 'MUSIM HUJAN' : 'MUSIM KEMARAU'),
+      season: () => (state.day % 2 === 1 ? 'RAINY SEASON' : 'DRY SEASON'),
       rainVisible: () => rain.visible,
       // v9 iteration 4 hooks: Pointer Lock + ADS, ammo/shops, day cycle,
       // bloom, instancing, pooling, peds/faction, vision cones, traffic,
@@ -3922,11 +4004,25 @@ export function createGame(canvas, seed) {
       // Probe hook (iteration 5, §4): drop a police cruiser on a spot
       // and stop it — the clamp test parks one just short of the island
       // gate and watches it hold at x 209 instead of crossing.
-      placePoliceCar: (idx, x, z) => {
+      // Iteration 6: an optional heading — the clamp test parks the
+      // cruiser facing east (toward Rico on the island). Without it the
+      // cruiser's heading is whatever it was patrolling with, and at
+      // SwiftShader speed (~0.02-0.04x real time) the 40 s window is
+      // ~1-2 game-seconds: a cruiser that first has to turn ~180 deg
+      // (1.43 game-s at turnRate 2.2) never moves east inside the
+      // window, so the test failed 3 of 4 runs while the game itself
+      // was correct (diagnostic diag-gate-clamp: the cruiser drives
+      // 207 -> 209 and holds there). The heading is not what the test
+      // measures — the hold at 209 is — so it is set, not left to luck.
+      placePoliceCar: (idx, x, z, heading) => {
         const c = wanted.policeCars[idx];
         if (!c) return null;
         c.group.position.set(x, 0, z);
         c.speed = 0;
+        if (typeof heading === 'number') {
+          c.heading = heading;
+          c.group.rotation.y = heading;
+        }
         return { x, z };
       },
       stopPoliceCar: () => {

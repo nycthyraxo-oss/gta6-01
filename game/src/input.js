@@ -3,6 +3,14 @@
 // and taken once, so a press between two frames is never lost and never
 // counted twice. Enter / Space is the confirm key: it starts the game from
 // the title screen, so a keyboard-only player never needs the mouse.
+//
+// v9 iteration 4: Pointer Lock. A left click on the canvas locks the
+// pointer (canvas.requestPointerLock) and the mouse turns the camera
+// directly (movementX/Y) — over-the-shoulder third person. Left click is
+// purely shooting; right click held is ADS (aim down sights, camera
+// zooms in). Mouse drag stays as the fallback: when the lock is
+// unavailable (headless, permission denied, Esc cooldown) the drag
+// deltas still turn the camera, so the headless probe keeps working.
 export const ACTION_ENTER = 1;
 export const ACTION_SHOOT = 2;
 export const ACTION_PAUSE = 4;
@@ -13,8 +21,26 @@ export const ACTION_MAP = 64;
 export const ACTION_RADIO = 128;
 export const ACTION_NIGHT = 256;
 export const ACTION_SPAWN_CAR = 512;
+// v9 iteration 3: number keys switch weapon (1 pistol, 2 knife, 3 bazooka).
+export const ACTION_WEAPON_1 = 1024;
+export const ACTION_WEAPON_2 = 2048;
+export const ACTION_WEAPON_3 = 4096;
+// v9 iteration 4: 4 SMG, 5 shotgun, 6 rifle (shop weapons, REP-gated).
+export const ACTION_WEAPON_4 = 8192;
+export const ACTION_WEAPON_5 = 16384;
+export const ACTION_WEAPON_6 = 32768;
 
 const MOVE_KEYS = new Set(['KeyW', 'KeyA', 'KeyS', 'KeyD', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight']);
+// Control keys whose browser default is suppressed while the canvas has
+// focus: Space/arrows scroll the page, the rest have no default but are
+// listed so the set is explicit. Tab and Escape are NOT here — Tab keeps
+// keyboard navigation of the title buttons, Escape exits Pointer Lock
+// (the browser owns that one).
+const CONTROL_KEYS = new Set([
+  ...MOVE_KEYS, 'Space', 'KeyE', 'KeyF', 'KeyQ', 'KeyM', 'KeyL', 'KeyV',
+  'KeyR', 'KeyN', 'KeyP', 'Digit1', 'Digit2', 'Digit3', 'Digit4', 'Digit5',
+  'Digit6', 'Digit7', 'Digit8', 'Digit9', 'Enter',
+]);
 
 export function createInput(canvas) {
   const held = new Set();
@@ -24,6 +50,16 @@ export function createInput(canvas) {
   let dragging = false;
   let lastX = 0;
   let lastY = 0;
+  // Pointer Lock state (v9 iteration 4).
+  let locked = false;
+  let pointerX = 0;
+  let pointerY = 0;
+  let aiming = false;
+  let lastAimAt = 0;
+  // Last number key pressed (1-9), for the shop menu. Taken once per
+  // frame by the game; drained every frame so a stale digit never fires
+  // a purchase later.
+  let digit = 0;
 
   window.addEventListener('keydown', (event) => {
     if (MOVE_KEYS.has(event.code)) held.add(event.code);
@@ -39,9 +75,18 @@ export function createInput(canvas) {
       else if (event.code === 'KeyL') actions |= ACTION_NIGHT;
       else if (event.code === 'KeyV') actions |= ACTION_SPAWN_CAR;
       else if (event.code === 'KeyR') actions |= ACTION_RESTART;
+      else if (event.code === 'Digit1') { actions |= ACTION_WEAPON_1; digit = 1; }
+      else if (event.code === 'Digit2') { actions |= ACTION_WEAPON_2; digit = 2; }
+      else if (event.code === 'Digit3') { actions |= ACTION_WEAPON_3; digit = 3; }
+      else if (event.code === 'Digit4') { actions |= ACTION_WEAPON_4; digit = 4; }
+      else if (event.code === 'Digit5') { actions |= ACTION_WEAPON_5; digit = 5; }
+      else if (event.code === 'Digit6') { actions |= ACTION_WEAPON_6; digit = 6; }
+      else if (event.code === 'Digit7') digit = 7;
+      else if (event.code === 'Digit8') digit = 8;
+      else if (event.code === 'Digit9') digit = 9;
       else if (event.code === 'Enter' || event.code === 'Space') actions |= ACTION_CONFIRM;
     }
-    if (MOVE_KEYS.has(event.code) || event.code === 'Space') event.preventDefault();
+    if (CONTROL_KEYS.has(event.code)) event.preventDefault();
   });
   window.addEventListener('keyup', (event) => {
     held.delete(event.code);
@@ -54,17 +99,41 @@ export function createInput(canvas) {
     dragging = true;
     lastX = event.clientX;
     lastY = event.clientY;
-    if (event.button === 0) actions |= ACTION_SHOOT;
+    if (event.button === 0) {
+      actions |= ACTION_SHOOT;
+      // Pointer Lock on left click: the mouse now turns the camera.
+      // Guarded — a rejected lock (headless, cooldown after Esc, no
+      // permission) falls through silently to the drag fallback.
+      try {
+        const p = canvas.requestPointerLock();
+        if (p && typeof p.catch === 'function') p.catch(() => {});
+      } catch {
+        // Drag fallback stays live.
+      }
+    }
+    if (event.button === 2) aiming = true;
+  });
+  // Right click is ADS, never a context menu.
+  canvas.addEventListener('contextmenu', (event) => event.preventDefault());
+  document.addEventListener('pointerlockchange', () => {
+    locked = document.pointerLockElement === canvas;
   });
   window.addEventListener('pointermove', (event) => {
-    if (!dragging) return;
-    dragX += event.clientX - lastX;
-    dragY += event.clientY - lastY;
-    lastX = event.clientX;
-    lastY = event.clientY;
+    if (locked) {
+      pointerX += event.movementX || 0;
+      pointerY += event.movementY || 0;
+      lastAimAt = performance.now();
+    } else if (dragging) {
+      dragX += event.clientX - lastX;
+      dragY += event.clientY - lastY;
+      lastX = event.clientX;
+      lastY = event.clientY;
+      lastAimAt = performance.now();
+    }
   });
-  window.addEventListener('pointerup', () => {
+  window.addEventListener('pointerup', (event) => {
     dragging = false;
+    if (event.button === 2) aiming = false;
   });
 
   return {
@@ -90,6 +159,37 @@ export function createInput(canvas) {
       const d = { x: dragX, y: dragY };
       dragX = 0;
       dragY = 0;
+      return d;
+    },
+    // Pointer Lock deltas since the last take (v9 iteration 4). Zero when
+    // the pointer is not locked — the drag fallback carries those frames.
+    takePointer() {
+      const d = { x: pointerX, y: pointerY };
+      pointerX = 0;
+      pointerY = 0;
+      return d;
+    },
+    isLocked() {
+      return locked;
+    },
+    // Right mouse held: aim down sights.
+    aiming() {
+      return aiming;
+    },
+    // Wall time of the last camera input (lock or drag), for the drive-by
+    // override: while the player is actively aiming, the car camera does
+    // not auto-trail back to the car heading.
+    lastAimAt() {
+      return lastAimAt;
+    },
+    releaseLock() {
+      if (locked && document.exitPointerLock) {
+        try { document.exitPointerLock(); } catch { /* already out */ }
+      }
+    },
+    takeDigit() {
+      const d = digit;
+      digit = 0;
       return d;
     },
     takeActions() {

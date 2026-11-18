@@ -28,7 +28,7 @@ export const SPECS = [
   { color: 0xc23b2e, name: 'Banteng GT', kind: 'muscle', length: 4.7, width: 2.0, bodyH: 0.62, wheelR: 0.48, wheelbase: 3.0, scoop: true, chromeBumpers: true, roundLights: true, tailBar: true, accelMul: 1.15, topMul: 1.05, steerMul: 0.95, gripMul: 0.85, cabin: 'closed' },
   { color: 0x2e6fc2, name: 'Kancil Hatch', kind: 'hatch', length: 3.8, width: 1.85, bodyH: 0.68, wheelR: 0.42, wheelbase: 2.5, roofRails: true, cabin: 'closed', accelMul: 1.0, topMul: 0.95, steerMul: 1.0, gripMul: 1.0 },
   { color: 0xe8c832, name: 'Solano Cabrio', kind: 'cabrio', length: 4.2, width: 1.9, bodyH: 0.55, wheelR: 0.45, wheelbase: 2.7, cabin: 'open', stripes: 0x22262c, accelMul: 1.0, topMul: 1.02, steerMul: 1.05, gripMul: 1.0 },
-  { color: 0x3aa655, name: 'Garuda Sedan', kind: 'sedan', length: 4.5, width: 1.95, bodyH: 0.6, wheelR: 0.45, wheelbase: 2.9, chrome: true, cabin: 'closed', accelMul: 1.0, topMul: 1.0, steerMul: 1.0, gripMul: 1.0 },
+  { color: 0x3aa655, name: 'Garuda Sedan', kind: 'sedan', length: 4.5, width: 1.95, bodyH: 0.6, wheelR: 0.45, wheelbase: 2.9, cabin: 'closed', accelMul: 1.0, topMul: 1.0, steerMul: 1.0, gripMul: 1.0 },
   { color: 0x8a5fc2, name: 'Furia Sport', kind: 'sport', length: 4.2, width: 2.0, bodyH: 0.5, wheelR: 0.46, wheelbase: 2.9, wing: true, stripes: 0xe8e8e8, sideSkirts: true, slopedLights: true, tailBar: true, dualExhaust: true, cabin: 'closed', accelMul: 1.0, topMul: 1.12, steerMul: 1.1, gripMul: 1.15 },
   { color: 0xd8d8d8, name: 'Lobo Van', kind: 'van', length: 4.8, width: 2.1, bodyH: 0.95, wheelR: 0.46, wheelbase: 3.1, checker: true, roofSign: true, cabin: 'closed', accelMul: 0.8, topMul: 0.82, steerMul: 0.85, gripMul: 0.9 },
   { color: 0x22262c, name: 'Bruto 4x4', kind: 'suv', length: 4.5, width: 2.05, bodyH: 0.78, wheelR: 0.52, wheelbase: 2.8, roofRack: true, cabin: 'closed', accelMul: 0.95, topMul: 0.95, steerMul: 0.95, gripMul: 0.95 },
@@ -244,9 +244,13 @@ function addExtras(group, spec, bodyY, cabY, cabH, cabZ, W, L, own) {
       group.add(box(0.08, 0.16, L * 0.7, mat(0x14161a, 0.5, 0.5), sx, 0.54, 0));
     }
   }
-  if (spec.chrome) {
-    group.add(box(W * 1.01, 0.05, L * 0.9, CHROME_MAT, 0, bodyY + 0.02, 0));
-  }
+  // v9 iteration 6 — chrome waist belt on EVERY class, not just the
+  // Garuda: a bright line around the waist is what breaks the slab
+  // into a body at 20-40 m. Without it the car reads as one flat box
+  // of paint; with it the eye gets a waistline, a glasshouse above and
+  // a lower body below. The belt is 5 cm tall, 1% wider than the body
+  // so it stands proud of the paint on all four sides.
+  group.add(box(W * 1.01, 0.05, L * 0.9, CHROME_MAT, 0, bodyY + 0.02, 0));
   if (spec.chromeBumpers) {
     // Muscle chrome bumpers, front + rear.
     group.add(box(W * 0.98, 0.14, 0.14, CHROME_MAT, 0, bodyY - 0.08, L / 2 + 0.06));
@@ -451,6 +455,11 @@ export function makeCarMesh(color, isPolice) {
   } else {
     group.add(box(W * 0.98, 0.16, 0.22, mat(0x1c1e22, 0.5, 0.6), 0, r + 0.12, L / 2 + 0.02));
     group.add(box(W * 0.98, 0.16, 0.22, mat(0x1c1e22, 0.5, 0.6), 0, r + 0.12, -L / 2 - 0.02));
+    // v9 iteration 6: a thin chrome strip on top of each dark bumper,
+    // front and rear — the bumper's bright edge is what reads as a
+    // bumper at distance; the dark slab alone vanished into the body.
+    group.add(box(W * 0.98, 0.05, 0.24, CHROME_MAT, 0, r + 0.22, L / 2 + 0.02));
+    group.add(box(W * 0.98, 0.05, 0.24, CHROME_MAT, 0, r + 0.22, -L / 2 - 0.02));
   }
   if (spec.roundLights) {
     // Muscle round headlights: chrome rings with a warm lens.
@@ -578,6 +587,18 @@ export function makeCarMesh(color, isPolice) {
     for (const tx of [-W * 0.32, W * 0.32]) {
       group.add(box(0.34, 0.16, 0.08, tailMat, tx, bodyY + 0.08, -L / 2 - 0.1));
     }
+  }
+
+  // v9 iteration 6 — side marker lights: amber at the front fenders,
+  // red at the rear, on both flanks. A car seen from the side at dusk
+  // is a dark slab with a glasshouse; the four markers (HDR, so they
+  // bloom like the headlights) are what say "car" from the side, and
+  // they are what keeps a dark parked car readable after dark.
+  const markerAmber = own(new THREE.MeshBasicMaterial({ color: new THREE.Color(2.0, 1.2, 0.25) }));
+  const markerRed = own(new THREE.MeshBasicMaterial({ color: new THREE.Color(1.8, 0.25, 0.2) }));
+  for (const side of [-1, 1]) {
+    group.add(box(0.04, 0.1, 0.22, markerAmber, side * (W / 2 + 0.02), bodyY + 0.05, L / 2 - 0.55));
+    group.add(box(0.04, 0.1, 0.22, markerRed, side * (W / 2 + 0.02), bodyY + 0.05, -L / 2 + 0.55));
   }
 
   // Door seams + handles + mirrors + plates: the details that make the

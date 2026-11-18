@@ -25,7 +25,7 @@ const SHOP_SIGNS = [
   { text: 'CAFÉ LUNA', bg: '#3a2a4a', fg: '#ffd23e' },
   { text: 'PIZZA FUOCO', bg: '#7a2a1a', fg: '#ffe9a8' },
   { text: 'BAR NEÓN', bg: '#123a4a', fg: '#7dffd8' },
-  { text: 'TALLER MARLA', bg: '#4a2a12', fg: '#ffd23e' },
+  { text: "MARLA'S GARAGE", bg: '#4a2a12', fg: '#ffd23e' },
   { text: 'Lemen Sayang Nycthyra', bg: '#2a4a22', fg: '#eaf4ff' },
   { text: 'CINE SOL', bg: '#5a1a3a', fg: '#ffb27a' },
   { text: 'HOTEL BRISA', bg: '#1a3a5a', fg: '#ffe9a8' },
@@ -34,24 +34,24 @@ const SHOP_SIGNS = [
   { text: 'SURF & SOL', bg: '#1a4a5a', fg: '#7dffd8' },
   // v9 iteration 5 (§0): ground-floor commercial for the dense city fill —
   // our own Indonesian shop names, so the street reads Costa Fuego.
-  { text: 'BENGKEL JAYA', bg: '#2a2a2a', fg: '#ffd23e' },
-  { text: 'MINIMARKET 24', bg: '#1a5a2a', fg: '#ffffff' },
-  { text: 'WARUNG KOPI', bg: '#5a3a1a', fg: '#ffe9a8' },
-  { text: 'TOKO KELONTONG', bg: '#3a2a5a', fg: '#7dffd8' },
-  { text: 'CAFE SENJA', bg: '#5a2a3a', fg: '#ffb27a' },
-  { text: 'LAUNDRY KILAT', bg: '#1a3a5a', fg: '#7dd8ff' },
+  { text: 'JAYA AUTO REPAIR', bg: '#2a2a2a', fg: '#ffd23e' },
+  { text: 'MINIMART 24', bg: '#1a5a2a', fg: '#ffffff' },
+  { text: 'COFFEE STALL', bg: '#5a3a1a', fg: '#ffe9a8' },
+  { text: 'CORNER STORE', bg: '#3a2a5a', fg: '#7dffd8' },
+  { text: 'DUSK CAFE', bg: '#5a2a3a', fg: '#ffb27a' },
+  { text: 'QUICK LAUNDRY', bg: '#1a3a5a', fg: '#7dd8ff' },
   { text: 'BARBERSHOP', bg: '#2a2a2a', fg: '#eaf4ff' },
-  { text: 'ROTI BAKAR', bg: '#7a4a1a', fg: '#ffe9a8' },
-  { text: 'CUCI MOTOR', bg: '#123a4a', fg: '#7dffd8' },
-  { text: 'KEDAI MIE', bg: '#7a1a1a', fg: '#ffd23e' },
-  { text: 'TOKO BANGUNAN', bg: '#4a4a1a', fg: '#ffffff' },
-  { text: 'BENGKEL LAS', bg: '#3a3a3a', fg: '#ffb27a' },
-  { text: 'WARUNG NASI', bg: '#2a5a1a', fg: '#ffe9a8' },
-  { text: 'TOKO HP', bg: '#1a1a3a', fg: '#7dd8ff' },
-  { text: 'APOTEK SEHAT', bg: '#1a5a3a', fg: '#ffffff' },
-  { text: 'KIOS PULSA', bg: '#5a1a5a', fg: '#ffd23e' },
-  { text: 'CAFE PANTAI', bg: '#1a4a5a', fg: '#ffe9a8' },
-  { text: 'TOKO BUNGA', bg: '#5a2a4a', fg: '#ffb27a' },
+  { text: 'TOASTED BREAD', bg: '#7a4a1a', fg: '#ffe9a8' },
+  { text: 'BIKE WASH', bg: '#123a4a', fg: '#7dffd8' },
+  { text: 'NOODLE BAR', bg: '#7a1a1a', fg: '#ffd23e' },
+  { text: 'HARDWARE STORE', bg: '#4a4a1a', fg: '#ffffff' },
+  { text: 'WELDING SHOP', bg: '#3a3a3a', fg: '#ffb27a' },
+  { text: 'RICE STALL', bg: '#2a5a1a', fg: '#ffe9a8' },
+  { text: 'PHONE SHOP', bg: '#1a1a3a', fg: '#7dd8ff' },
+  { text: 'HEALTH PHARMACY', bg: '#1a5a3a', fg: '#ffffff' },
+  { text: 'TOP-UP KIOSK', bg: '#5a1a5a', fg: '#ffd23e' },
+  { text: 'BEACH CAFE', bg: '#1a4a5a', fg: '#ffe9a8' },
+  { text: 'FLOWER SHOP', bg: '#5a2a4a', fg: '#ffb27a' },
 ];
 
 function signTexture(text, bg, fg, canvasW = 256) {
@@ -98,32 +98,28 @@ function hash01(a, b, c) {
   const s = Math.sin(a * 127.1 + b * 311.7 + c * 74.7) * 43758.5453;
   return s - Math.floor(s);
 }
-// One decision per window, shared by both canvases: the map colour and
-// the glow colour (null = dark window, no glow). Lit windows are a
-// MINORITY with varied brightness — a tower where every window glows at
-// full brightness reads as a white wall, not a city. Bright warm, dim
-// warm and dim cool, the rest dark.
-function windowColors(style, h) {
-  if (style === 'glass') {
-    if (h < 0.35) return { map: '#bfe4ff', glow: '#d5ecff' };
-    if (h < 0.5) return { map: '#7fb3d8', glow: '#5a7a96' };
-    return { map: '#1c2a38', glow: null };
-  }
-  if (style === 'brick') {
-    if (h < 0.3) return { map: '#ffe9a8', glow: '#ffe9a8' };
-    return { map: '#241a16', glow: null };
-  }
-  if (h < 0.28) {
-    const c = h < 0.15 ? '#ffe9a8' : '#ffb27a';
-    return { map: c, glow: c };
-  }
-  if (h < 0.42) return { map: '#8a7a68', glow: '#7a6a4e' };
-  if (h < 0.52) return { map: '#9fd8ff', glow: '#5a7a96' };
-  return { map: '#20262f', glow: null };
-}
 const FACADE_CACHE = new Map();
-function facadePair(style, color) {
-  const key = `${style}|${color}`;
+// v9 iteration 6 — DESIGNED facades, not random checkerboard. The old
+// pattern decided every window independently (hash of colour + cell),
+// so a tower read as random on/off noise — and because the texture was
+// cached per style|colour, every building of one colour wore the SAME
+// noise. A facade now reads as a building: each of the 8 rows is a
+// floor with one character — AWAKE (most windows lit), QUIET (a few
+// lit) or DARK (almost none) — and one vertical core column (the
+// stairwell / lift shaft) stays lit top to bottom, so the tower has
+// horizontal bands + one lit spine. The lit/dark decision is per floor
+// + core; the per-window hash only picks the exact colour within the
+// lit or dark family. `seed` (0-5, one per building, from its position
+// hash) varies the pattern between buildings of the same colour, so the
+// street stops repeating one texture.
+function facadeFloorProb(seed, r) {
+  const fh = hash01(seed, r, 7);
+  if (fh < 0.4) return 0.78; // awake floor
+  if (fh < 0.72) return 0.16; // quiet floor
+  return 0.05; // dark floor
+}
+function facadePair(style, color, seed = 0) {
+  const key = `${style}|${color}|${seed}`;
   if (FACADE_CACHE.has(key)) return FACADE_CACHE.get(key);
   const canvas = document.createElement('canvas');
   canvas.width = 256;
@@ -164,9 +160,13 @@ function facadePair(style, color) {
   // Faint floor lines so the grid reads as storeys.
   ctx.fillStyle = 'rgba(0,0,0,0.18)';
   for (let r = 0; r < 8; r += 1) ctx.fillRect(0, r * 32 + 30, 256, 2);
+  // The lit core column (stairwell / lift shaft): one column per facade,
+  // lit top to bottom — the vertical spine against the floor bands.
+  const coreCol = Math.floor(hash01(seed, 99, 3) * cols);
   for (let r = 0; r < rows; r += 1) {
     for (let c = 0; c < cols; c += 1) {
-      const h = hash01(color % 997, c, r);
+      const h = hash01(seed, c, r);
+      const h2 = hash01(seed, r, c);
       const x = c * cellW + 9;
       const y = r * cellH + 6;
       const w = cellW - 18;
@@ -186,7 +186,19 @@ function facadePair(style, color) {
         }
         continue;
       }
-      const wc = windowColors(style, h);
+      // Lit or dark is decided by the FLOOR (awake / quiet / dark) and
+      // the core column — never per window. The hash only picks the exact
+      // colour inside the lit or dark family, so an awake floor glows as
+      // a band and a dark floor stays dark.
+      const prob = c === coreCol ? 0.85 : facadeFloorProb(seed, r);
+      let wc;
+      if (h < prob) {
+        if (style === 'glass') wc = h2 < 0.7 ? { map: '#bfe4ff', glow: '#d5ecff' } : { map: '#7fb3d8', glow: '#5a7a96' };
+        else if (style === 'brick') wc = { map: '#ffe9a8', glow: '#ffe9a8' };
+        else wc = h2 < 0.6 ? { map: '#ffe9a8', glow: '#ffe9a8' } : { map: '#ffb27a', glow: '#ffb27a' };
+      } else if (style === 'glass') wc = { map: '#1c2a38', glow: null };
+      else if (style === 'brick') wc = { map: '#241a16', glow: null };
+      else wc = h2 < 0.12 ? { map: '#8a7a68', glow: '#7a6a4e' } : { map: '#20262f', glow: null };
       ctx.fillStyle = wc.map;
       ctx.fillRect(x, y, w, hh);
       if (wc.glow) {
@@ -222,11 +234,17 @@ function facadePair(style, color) {
   FACADE_CACHE.set(key, pair);
   return pair;
 }
-function facadeTexture(style, color) {
-  return facadePair(style, color).map;
+function facadeTexture(style, color, seed = 0) {
+  return facadePair(style, color, seed).map;
 }
-function facadeEmissiveTexture(style, color) {
-  return facadePair(style, color).emissive;
+function facadeEmissiveTexture(style, color, seed = 0) {
+  return facadePair(style, color, seed).emissive;
+}
+// One facade variant per building: the seed comes from the building's
+// position hash (0-5, six variants per style|colour), so two towers of
+// the same colour wear different window patterns.
+function facadeSeed(x, z) {
+  return Math.floor(hash01(x, z, 91) * 6);
 }
 
 // Striped awning textures (red/white, teal/white, yellow/white), shared.
@@ -687,7 +705,7 @@ export function buildCity(scene, rng, cfg) {
     // v9 iteration 5 (§3): the outfit shop and the island district, both
     // real places the player can walk to — the map markers point here.
     outfit: { x: 160, z: -28, name: 'Butik Neon' },
-    island: { x: 247, z: 100, name: 'Pulau Fuego' },
+    island: { x: 247, z: 100, name: 'Fuego Island' },
   };
 
   // Blocks that never get a random building: the landmark blocks (computed
@@ -723,15 +741,19 @@ export function buildCity(scene, rng, cfg) {
   // (below the building loop): the pass reads these records, it never
   // re-rolls the rng, so the city layout stays byte-identical to v8.
   const buildingRecords = [];
+  // v9 iteration 6: every free-standing tree is recorded too (avenue +
+  // park), so the placement audit can prove no trunk stands on a road.
+  const treeSpots = [];
 
   function raiseBuilding(ox, oz, w, d, h, style, colorIdx) {
     const styleDef = DISTRICT_STYLES[style];
     const color = styleDef.palette[colorIdx % styleDef.palette.length];
-    const ftex = facadeTexture(style, color).clone();
+    const seed = facadeSeed(ox, oz);
+    const ftex = facadeTexture(style, color, seed).clone();
     ftex.needsUpdate = true;
     ftex.repeat.set(Math.max(1, Math.round(w / 6)), Math.max(1, Math.round(h / 9)));
     // v9: the same repeat on the emissive map, so lit windows glow.
-    const etex = facadeEmissiveTexture(style, color).clone();
+    const etex = facadeEmissiveTexture(style, color, seed).clone();
     etex.needsUpdate = true;
     etex.repeat.copy(ftex.repeat);
     const frontMat = new THREE.MeshStandardMaterial({
@@ -877,7 +899,7 @@ export function buildCity(scene, rng, cfg) {
 
   // Name board for a landmark: a lit text plane on its street-facing side,
   // so every named building reads its name in 3D — the same name the
-  // missions and messages use (TALLER MARLA = Marla's Garage, FUEGO BANK =
+  // missions and messages use (MARLA'S GARAGE = Marla's Garage, FUEGO BANK =
   // the Costa Bank job, COSTA GENERAL = the respawn hospital).
   function nameBoard(text, bg, fg, w, h, x, y, z) {
     const board = new THREE.Mesh(
@@ -891,10 +913,12 @@ export function buildCity(scene, rng, cfg) {
 
   // Fuego Tower: the one tall landmark, dead centre, in the same blue-glass
   // facade as the plaza towers around it.
-  const towerTex = facadeTexture('glass', 0x5a8ab0).clone();
+  // v9 iteration 6: the tower gets its own facade seed (its position),
+  // so its window bands differ from the other glass towers.
+  const towerTex = facadeTexture('glass', 0x5a8ab0, facadeSeed(0, -28)).clone();
   towerTex.needsUpdate = true;
   towerTex.repeat.set(4, 10);
-  const towerEmissive = facadeEmissiveTexture('glass', 0x5a8ab0).clone();
+  const towerEmissive = facadeEmissiveTexture('glass', 0x5a8ab0, facadeSeed(0, -28)).clone();
   towerEmissive.needsUpdate = true;
   towerEmissive.repeat.copy(towerTex.repeat);
   const towerMat = new THREE.MeshStandardMaterial({
@@ -927,11 +951,11 @@ export function buildCity(scene, rng, cfg) {
   const sign = box(20, 2.4, 0.6, 0xffe9a8, landmarks.garage.x, 8, landmarks.garage.z + 7.2);
   sign.castShadow = false;
   group.add(sign);
-  nameBoard('TALLER MARLA', '#4a2a12', '#ffd23e', 18, 2.2, landmarks.garage.x, 8, landmarks.garage.z + 7.55);
+  nameBoard("MARLA'S GARAGE", '#4a2a12', '#ffd23e', 18, 2.2, landmarks.garage.x, 8, landmarks.garage.z + 7.55);
   // The approach face (the side the player walks in from, -z): the old
   // garage showed a blank brick wall to everyone arriving for mission 1.
   // It gets a shopfront — dark glass, lit display windows, a striped
-  // awning — and its own TALLER MARLA board facing the street, so the
+  // awning — and its own MARLA'S GARAGE board facing the street, so the
   // first thing a new player sees is a place, not a wall.
   const gGlass = new THREE.Mesh(
     new THREE.BoxGeometry(14, 2.6, 0.5),
@@ -958,8 +982,37 @@ export function buildCity(scene, rng, cfg) {
   gAwning.position.set(landmarks.garage.x, 3.1, landmarks.garage.z - 7.9);
   gAwning.castShadow = true;
   group.add(gAwning);
-  const gSign = nameBoard('TALLER MARLA', '#4a2a12', '#ffd23e', 18, 2.2, landmarks.garage.x, 8, landmarks.garage.z - 7.55);
+  const gSign = nameBoard("MARLA'S GARAGE", '#4a2a12', '#ffd23e', 18, 2.2, landmarks.garage.x, 8, landmarks.garage.z - 7.55);
   gSign.rotation.y = Math.PI;
+
+  // v9 iteration 6 — the EAST face (x = -100) faced the x=-84 avenue
+  // as a blank brick wall: the first thing a driver on the avenue saw
+  // of the garage was nothing. It now has its own face: a glass band
+  // with two lit display windows, a side door at the north end, and a
+  // small SERVICE ENTRANCE board above the door, all facing +x toward
+  // the avenue. The east face is 14 m (z 77..91): door z 78.4..80.6,
+  // windows z 82.8..85.2 and 86.8..89.2, nothing past the south face.
+  const eGlass = new THREE.Mesh(
+    new THREE.BoxGeometry(0.5, 2.2, 6.4),
+    cityMat(0x1a2a33, 0.15, 0.6),
+  );
+  eGlass.position.set(landmarks.garage.x + 12.25, 1.4, landmarks.garage.z + 2);
+  group.add(eGlass);
+  for (const dz of [-0.4, 3.6]) {
+    const eDisplay = new THREE.Mesh(
+      new THREE.PlaneGeometry(2.4, 1.4),
+      new THREE.MeshBasicMaterial({ color: 0xffca7a }),
+    );
+    eDisplay.position.set(landmarks.garage.x + 12.55, 1.4, landmarks.garage.z + dz);
+    eDisplay.rotation.y = Math.PI / 2;
+    group.add(eDisplay);
+    group.add(box(0.1, 0.14, 2.4, 0x2a2018, landmarks.garage.x + 12.55, 1.4, landmarks.garage.z + dz));
+  }
+  group.add(box(0.3, 3, 2.2, 0x2a2018, landmarks.garage.x + 12.15, 1.5, landmarks.garage.z - 4.5));
+  group.add(box(0.34, 2.6, 1.7, 0x3a3f46, landmarks.garage.x + 12.17, 1.3, landmarks.garage.z - 4.5));
+  group.add(box(0.1, 0.5, 0.18, 0xffd23e, landmarks.garage.x + 12.38, 1.3, landmarks.garage.z - 3.85));
+  const eSign = nameBoard('SERVICE ENTRANCE', '#4a2a12', '#ffd23e', 4.5, 0.9, landmarks.garage.x + 12.6, 4, landmarks.garage.z - 4.5);
+  eSign.rotation.y = Math.PI / 2;
 
   // Shopfront doors and window dressing: the approach face gets two
   // framed doors with handles at its ends, cross-barred display windows
@@ -1011,7 +1064,10 @@ export function buildCity(scene, rng, cfg) {
   crateStack.position.set(-124.5, 0, 71);
   group.add(crateStack);
   const barrelMat2 = cityMat(0xc22a22, 0.6, 0.3);
-  for (const [bx2, bz2] of [[-99.5, 71], [-99.5, 73.5]]) {
+  // v9 iteration 6: the barrels stood at x -99.5 — east of the apron,
+  // on the dirt past the garage's corner. They now sit ON the apron,
+  // against the shopfront's east end, next to the east door.
+  for (const [bx2, bz2] of [[-103, 71], [-103, 73.5]]) {
     const b = new THREE.Mesh(new THREE.CylinderGeometry(0.55, 0.55, 1.3, 10), barrelMat2);
     b.position.set(bx2, 0.65, bz2);
     b.castShadow = true;
@@ -1023,6 +1079,50 @@ export function buildCity(scene, rng, cfg) {
     tire.position.set(-101, 0.12 + i * 0.24, 74);
     tire.castShadow = true;
     group.add(tire);
+  }
+  // v9 iteration 6 — forecourt clutter: the apron's middle was bare
+  // paving. A workbench against the shopfront's west end, a red tool
+  // cart by the east door, a second crate stack at the west edge, and
+  // two cones marking the apron's corners. Everything stays clear of
+  // the mission-1 walk line (x -104..-112) and of the parking bays.
+  group.add(box(2.4, 0.12, 0.8, 0x6a4a2a, -118.5, 0.95, 76.3));
+  group.add(box(0.12, 0.95, 0.8, 0x4a3a28, -119.6, 0.48, 76.3));
+  group.add(box(0.12, 0.95, 0.8, 0x4a3a28, -117.4, 0.48, 76.3));
+  group.add(box(0.5, 0.25, 0.3, 0x3a3f46, -119, 1.15, 76.3));
+  group.add(box(0.3, 0.2, 0.2, 0xc22a22, -118, 1.12, 76.2));
+  const cartMat = cityMat(0xc22a22, 0.6, 0.3);
+  const cart = new THREE.Group();
+  const cartBody = new THREE.Mesh(new THREE.BoxGeometry(0.9, 0.7, 0.6), cartMat);
+  cartBody.position.y = 0.55;
+  cartBody.castShadow = true;
+  cart.add(cartBody);
+  const cartTop = new THREE.Mesh(new THREE.BoxGeometry(0.95, 0.08, 0.65), cityMat(0x2a2a2a, 0.7));
+  cartTop.position.y = 0.95;
+  cart.add(cartTop);
+  const cartHandle = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.5, 0.06), cityMat(0x3a3f46, 0.6, 0.5));
+  cartHandle.position.set(0.48, 0.85, 0);
+  cart.add(cartHandle);
+  cart.position.set(-103.5, 0, 68.5);
+  cart.rotation.y = 0.3;
+  group.add(cart);
+  const crateStack2 = new THREE.Group();
+  const cc3 = new THREE.Mesh(new THREE.BoxGeometry(1.4, 1.4, 1.4), crateMat2);
+  cc3.position.y = 0.7;
+  cc3.castShadow = true;
+  crateStack2.add(cc3);
+  const cc4 = new THREE.Mesh(new THREE.BoxGeometry(1.0, 1.0, 1.0), crateMat2);
+  cc4.position.set(-0.2, 1.9, 0.1);
+  cc4.rotation.y = 0.7;
+  cc4.castShadow = true;
+  crateStack2.add(cc4);
+  crateStack2.position.set(-121, 0, 67);
+  group.add(crateStack2);
+  const coneMat = cityMat(0xe8641e, 0.7);
+  for (const [cx, cz] of [[-121, 64.5], [-103, 64.5]]) {
+    const cone = new THREE.Mesh(new THREE.ConeGeometry(0.35, 0.8, 10), coneMat);
+    cone.position.set(cx, 0.4, cz);
+    cone.castShadow = true;
+    group.add(cone);
   }
   // v9: rooftop clutter on the garage — an AC box, a vent pipe and a
   // small antenna mast, so the garage roof is not a bare slab from the
@@ -1084,10 +1184,11 @@ export function buildCity(scene, rng, cfg) {
   function raiseFixedBuilding(ox, oz, w, d, h, style, colorIdx) {
     const styleDef = DISTRICT_STYLES[style];
     const color = styleDef.palette[colorIdx % styleDef.palette.length];
-    const ftex = facadeTexture(style, color).clone();
+    const seed = facadeSeed(ox, oz);
+    const ftex = facadeTexture(style, color, seed).clone();
     ftex.needsUpdate = true;
     ftex.repeat.set(Math.max(1, Math.round(w / 6)), Math.max(1, Math.round(h / 9)));
-    const etex = facadeEmissiveTexture(style, color).clone();
+    const etex = facadeEmissiveTexture(style, color, seed).clone();
     etex.needsUpdate = true;
     etex.repeat.copy(ftex.repeat);
     const frontMat = new THREE.MeshStandardMaterial({
@@ -1209,7 +1310,9 @@ export function buildCity(scene, rng, cfg) {
   // No even rows, no symmetric patterns.
   // Tier 4 — extra-high landmark towers (28-34 m), clustered near the
   // commercial core and anchoring the south skyline terminus.
-  raiseFixedBuilding(20, 17, 12, 12, 34, 'glass', 0);
+  // v9 iteration 6: was (20,17) — astride the x=28 avenue AND the z=28
+  // street, 8 m into the road. Now the north-ring skyline anchor.
+  raiseFixedBuilding(-112, -168, 12, 12, 34, 'glass', 0);
   raiseFixedBuilding(0, 172, 16, 14, 28, 'glass', 1);
   // Tier 3 — high (20-22 m), stepping down from the landmarks at
   // irregular depths so the skyline reads organic, not a wall.
@@ -1217,14 +1320,26 @@ export function buildCity(scene, rng, cfg) {
   raiseFixedBuilding(52, 178, 14, 12, 22, 'commercial', 0);
   // Tier 2 — medium (12-13 m): dialogue west flank and the hospital
   // block corner, filling the mid-ring around the core.
-  raiseFixedBuilding(-128, 62, 12, 12, 12, 'residential', 0);
-  raiseFixedBuilding(-19, 128, 12, 10, 13, 'residential', 2);
+  // v9 iteration 6: was (-128,62) — 4 m into the x=-140 avenue.
+  // Moved to (-124,62), then to (-124,118): the (-124,62) spot put the
+  // building's CENTRE 12 m from the spawn (-112,60), inside the
+  // play-test's 14-unit spawn-clearance box. (-124,118) is clear of
+  // every building, road and protected rect (verified against all 97
+  // records), its west face flush with the x=-140 avenue.
+  raiseFixedBuilding(-124, 118, 12, 12, 12, 'residential', 0);
+  // v9 iteration 6: was (-19,128) — 7 m into the x=-28 avenue.
+  // Now in the hospital block, flush with the z=84 road edge.
+  raiseFixedBuilding(-11, 99, 12, 10, 13, 'residential', 2);
   // Tier 1 — low (8-10 m): docks warehouses (the duel still owns the
   // combat frame), the dialogue east shop, and a far south low-rise that
   // steps the skyline down to the edge.
   raiseFixedBuilding(160, 135, 14, 10, 10, 'brick', 1);
-  raiseFixedBuilding(134, 98, 14, 12, 8, 'brick', 0);
-  raiseFixedBuilding(-73, 70, 8, 10, 9, 'stucco', 1);
+  // v9 iteration 6: was (134,98) — 11 m into the x=140 avenue.
+  // Now on the south ring, 2 m clear of the (52,178) tower.
+  raiseFixedBuilding(56, 164, 14, 12, 8, 'brick', 0);
+  // v9 iteration 6: was (-73,70) — 3 m into the x=-84 avenue.
+  // Now inside the block, clear of the random glass tower.
+  raiseFixedBuilding(-69, 48, 8, 10, 9, 'stucco', 1);
   raiseFixedBuilding(-20, 185, 12, 10, 9, 'brick', 2);
 
   // USER REFINEMENT (v9 iteration 3): the empty brown ring beyond the
@@ -1270,11 +1385,11 @@ export function buildCity(scene, rng, cfg) {
   // A shop is placed only if it clears every other building (1 m
   // margin), the protected gameplay rects, and the package spots.
   const SHOP_NAMES = [
-    'BENGKEL JAYA', 'MINIMARKET 24', 'WARUNG KOPI', 'TOKO KELONTONG',
-    'CAFE SENJA', 'LAUNDRY KILAT', 'BARBERSHOP', 'ROTI BAKAR',
-    'CUCI MOTOR', 'KEDAI MIE', 'TOKO BANGUNAN', 'BENGKEL LAS',
-    'WARUNG NASI', 'TOKO HP', 'APOTEK SEHAT', 'KIOS PULSA',
-    'CAFE PANTAI', 'TOKO BUNGA',
+    'JAYA AUTO REPAIR', 'MINIMART 24', 'COFFEE STALL', 'CORNER STORE',
+    'DUSK CAFE', 'QUICK LAUNDRY', 'BARBERSHOP', 'TOASTED BREAD',
+    'BIKE WASH', 'NOODLE BAR', 'HARDWARE STORE', 'WELDING SHOP',
+    'RICE STALL', 'PHONE SHOP', 'HEALTH PHARMACY', 'TOP-UP KIOSK',
+    'BEACH CAFE', 'FLOWER SHOP',
   ];
   const SHOP_BG = ['#2a2a2a', '#1a5a2a', '#5a3a1a', '#3a2a5a', '#5a2a3a', '#1a3a5a'];
   const SHOP_FG = ['#ffd23e', '#ffffff', '#ffe9a8', '#7dffd8', '#ffb27a', '#7dd8ff'];
@@ -1307,10 +1422,11 @@ export function buildCity(scene, rng, cfg) {
     const g = new THREE.Group();
     g.position.set(ox, 0, oz);
     g.rotation.y = facing;
-    const ftex = facadeTexture(style, color).clone();
+    const seed = facadeSeed(ox, oz);
+    const ftex = facadeTexture(style, color, seed).clone();
     ftex.needsUpdate = true;
     ftex.repeat.set(Math.max(1, Math.round(w / 6)), Math.max(1, Math.round(h / 9)));
-    const etex = facadeEmissiveTexture(style, color).clone();
+    const etex = facadeEmissiveTexture(style, color, seed).clone();
     etex.needsUpdate = true;
     etex.repeat.copy(ftex.repeat);
     const frontMat = new THREE.MeshStandardMaterial({
@@ -1394,7 +1510,7 @@ export function buildCity(scene, rng, cfg) {
     }
   }
 
-  // v9 iteration 5 (§3): Pulau Fuego — a small island district across a
+  // v9 iteration 5 (§3): Fuego Island — a small island district across a
   // causeway from Fuego Pier. The island is a raised sand platform (top
   // 1.15, the same height as the pier deck, above the sea's wave crests)
   // with a grass top and three villas; the causeway deck continues the
@@ -1606,9 +1722,12 @@ export function buildCity(scene, rng, cfg) {
     const treeTrunk = cityMat(0x5a4630, 1);
     const treeLeaf = cityMat(0x4a7a3a, 1);
     for (let i = 0; i < 7; i += 1) {
-      const tx = cx + rng.range(-18, 18);
-      const tz = cz + rng.range(-18, 18);
+      // v9 iteration 6: ±18 put trunks on the block edge, crowns
+      // overhanging the road. ±15 keeps trunk and crown inside the park.
+      const tx = cx + rng.range(-15, 15);
+      const tz = cz + rng.range(-15, 15);
       if (Math.abs(tx - cx) < 3 && Math.abs(tz - cz) < 3) continue;
+      treeSpots.push({ x: tx, z: tz });
       const tree = new THREE.Group();
       const trunk = new THREE.Mesh(new THREE.CylinderGeometry(0.22, 0.32, 2.6, 6), treeTrunk);
       trunk.position.y = 1.3;
@@ -1806,10 +1925,18 @@ export function buildCity(scene, rng, cfg) {
   // Mercado market stalls: six colorful stalls with striped awnings and
   // fruit crates along the mercado block's street edges. Vendors stand at
   // them (see people.js); the stall spots are returned for the spawner.
+  // v9 iteration 6: the old spots stood ON the roads (z=-88 is the
+  // z=-84 street, x=80 is the x=84 avenue) — the user photographed them
+  // in the middle of the road twice. Every stall now sits just inside
+  // the block edge, on the sidewalk: the north row at z=-96 (2 m inside
+  // the block's north edge), the east row at x=72.5 (1.5 m inside the
+  // east edge); the middle east stall is at z=-106 so it clears the
+  // infill shop at (68,-112). The vendor spots move with them (the
+  // vendor stands 1.4 m block-side of the stall, see stallSpots below).
   const stallSpots = [];
   const stallDefs = [
-    { x: 42, z: -88, awn: 0 }, { x: 56, z: -88, awn: 1 }, { x: 70, z: -88, awn: 2 },
-    { x: 80, z: -98, awn: 1 }, { x: 80, z: -112, awn: 0 }, { x: 80, z: -126, awn: 2 },
+    { x: 42, z: -96, awn: 0, side: 'N' }, { x: 56, z: -96, awn: 1, side: 'N' }, { x: 70, z: -96, awn: 2, side: 'N' },
+    { x: 72.5, z: -98, awn: 1, side: 'E' }, { x: 72.5, z: -106, awn: 0, side: 'E' }, { x: 72.5, z: -126, awn: 2, side: 'E' },
   ];
   const fruitColors = [0xe07828, 0xd84a4a, 0xe8c832, 0x3aa655];
   for (const def of stallDefs) {
@@ -1845,10 +1972,14 @@ export function buildCity(scene, rng, cfg) {
       stall.add(fruit);
     }
     stall.position.set(def.x, 0, def.z);
-    stall.rotation.y = def.x > 76 ? Math.PI / 2 : 0;
+    // The awning front faces the street: north-row stalls face north
+    // (rotation 0), east-row stalls face east (rotation PI/2). The side
+    // is explicit in the def — the old x > 76 test broke when the east
+    // row moved inside the block edge (x 72.5).
+    stall.rotation.y = def.side === 'E' ? Math.PI / 2 : 0;
     group.add(stall);
     // The vendor stands behind the stall (block side) and faces the street.
-    stallSpots.push(def.x > 76
+    stallSpots.push(def.side === 'E'
       ? { x: def.x, z: def.z, facing: Math.PI / 2, vx: def.x - 1.4, vz: def.z, vFacing: Math.PI / 2 }
       : { x: def.x, z: def.z, facing: 0, vx: def.x, vz: def.z - 1.4, vFacing: 0 });
   }
@@ -1926,16 +2057,29 @@ export function buildCity(scene, rng, cfg) {
   }
   for (let z = -140; z <= 140; z += 28) {
     palm(W.beachX + 4 + rng.range(-2, 2), z + rng.range(-4, 4));
-    palm(W.beachX - 6 + rng.range(-2, 2), z + 14 + rng.range(-4, 4));
-    if (rng.chance(0.5)) palm(-140 + rng.range(-2, 2), z);
+    // v9 iteration 6: the second beach row stood at beachX - 6 (x 142-146)
+    // — on the x=140 avenue, not on the sand. It now lines the sand at
+    // beachX + 10 (x 158-162), clear of the road.
+    palm(W.beachX + 10 + rng.range(-2, 2), z + 14 + rng.range(-4, 4));
+    // v9 iteration 6: the west avenue palms stood ON the x=-140 avenue
+    // centreline. They now line the sidewalk of the west blocks (x -128)
+    // — and midway BETWEEN the streets (z + 14), because the loop's z
+    // values land on the street lines (-140, -84, -28, 28, 84, 140) and
+    // a palm at x -128, z -28 stands ON the z=-28 street. The last row
+    // wraps back (z - 14) so no palm leaves the map's north edge.
+    if (rng.chance(0.5)) palm(-128 + rng.range(-2, 2), (z >= 140 ? z - 14 : z + 14) + rng.range(-3, 3));
   }
   // Leafy avenue trees, one or two per block edge, seeded.
+  // v9 iteration 6: the ±20 m jitter put trunks up to 2 m into the
+  // roads. ±16 keeps every trunk inside its block (the block edge is
+  // 18 m from the centre, the road starts there).
   for (const bx of blockCenters) {
     for (const bz of blockCenters) {
       if (skipBlocks.has(`${bx},${bz}`)) continue;
       if (!rng.chance(0.45)) continue;
-      const tx = bx + rng.range(-20, 20);
-      const tz = bz + rng.range(-20, 20);
+      const tx = bx + rng.range(-16, 16);
+      const tz = bz + rng.range(-16, 16);
+      treeSpots.push({ x: tx, z: tz });
       const tree = new THREE.Group();
       const trunk = new THREE.Mesh(new THREE.CylinderGeometry(0.2, 0.3, 2.4, 6), cityMat(0x5a4630, 1));
       trunk.position.y = 1.2;
@@ -2120,8 +2264,10 @@ export function buildCity(scene, rng, cfg) {
   bin(-106, 68);
   bench(-118, 72, 0);
   for (let i = 0; i < 18; i += 1) {
-    const hx = blockCenters[Math.floor(rng.next() * blockCenters.length)] + rng.range(-24, 24);
-    const hz = blockCenters[Math.floor(rng.next() * blockCenters.length)] + rng.range(-24, 24);
+    // v9 iteration 6: ±24 put hydrants up to 6 m into the roads.
+    // ±16 keeps them inside their block (block edge 18 m).
+    const hx = blockCenters[Math.floor(rng.next() * blockCenters.length)] + rng.range(-16, 16);
+    const hz = blockCenters[Math.floor(rng.next() * blockCenters.length)] + rng.range(-16, 16);
     hydrant(hx, hz);
   }
   // Roadside benches (v9 iteration 3): the same rng draws, but the bench
@@ -2163,8 +2309,10 @@ export function buildCity(scene, rng, cfg) {
     bench(sx, sz, rot);
   }
   for (let i = 0; i < 10; i += 1) {
-    const bx3 = blockCenters[Math.floor(rng.next() * blockCenters.length)] + rng.range(-22, 22);
-    const bz3 = blockCenters[Math.floor(rng.next() * blockCenters.length)] + rng.range(-22, 22);
+    // v9 iteration 6: ±22 put bins up to 4 m into the roads; ±16 keeps
+    // them inside their block, same as the hydrants.
+    const bx3 = blockCenters[Math.floor(rng.next() * blockCenters.length)] + rng.range(-16, 16);
+    const bz3 = blockCenters[Math.floor(rng.next() * blockCenters.length)] + rng.range(-16, 16);
     bin(bx3, bz3);
   }
   for (let z = -120; z <= 120; z += 40) {
@@ -2231,6 +2379,10 @@ export function buildCity(scene, rng, cfg) {
   // a pole on the sidewalk corner and a green blade naming the cross
   // street, readable from both sides. Clear of mission lines, package
   // spots, the duel area and the beach. No rng.
+  // v9 iteration 6: each sign's pole + blade geometry is recorded, so
+  // the placement audit can prove the pole no longer passes through
+  // the middle of the text (the pole must sit at the blade's end).
+  const signRecords = [];
   const STREET_SIGNS = [
     { x: -84, z: -28, name: 'SUNSET DR' },
     { x: -28, z: 28, name: 'PLAZA WAY' },
@@ -2251,13 +2403,33 @@ export function buildCity(scene, rng, cfg) {
     const tex = signTexture(s.name, '#1a5a2a', '#ffffff');
     const bladeMat = new THREE.MeshStandardMaterial({ map: tex, roughness: 0.7 });
     const theta = Math.atan2(s.x - px, s.z - pz);
+    // v9 iteration 6: the blade was CENTRED on its pole, so the pole
+    // passed through the middle of the text ("DOCKS RD" read "DOC S
+    // RD"). The blade now hangs off the pole's end: its centre sits
+    // 1.7 m along the blade's long axis from the pole (half the 3.2 m
+    // blade + 0.1 clearance), so the pole stands at the blade's end and
+    // every letter reads from both approach angles.
+    const axisX = Math.cos(theta);
+    const axisZ = -Math.sin(theta);
+    const bladeX = px + axisX * 1.7;
+    const bladeZ = pz + axisZ * 1.7;
     for (const side of [0, Math.PI]) {
       const blade = new THREE.Mesh(new THREE.PlaneGeometry(3.2, 0.8), bladeMat);
-      blade.position.set(px, 2.9, pz);
+      blade.position.set(bladeX, 2.9, bladeZ);
       blade.rotation.y = theta + side;
       blade.translateZ(0.02);
       group.add(blade);
     }
+    // The blade's long axis in world space (rotation.y = theta maps
+    // local +X to (cos theta, 0, -sin theta)); the audit reads the
+    // pole-to-blade-centre distance along this axis (1.7 = the pole at
+    // the blade's end, 0 = through the middle of the text).
+    signRecords.push({
+      name: s.name, x: s.x, z: s.z, px, pz,
+      bladeX, bladeZ,
+      axisX, axisZ,
+      bladeHalf: 1.6,
+    });
   }
 
   // Street lamps along the avenues. v9 iteration 4: the poles and bulbs
@@ -2604,20 +2776,60 @@ export function buildCity(scene, rng, cfg) {
     im.castShadow = true;
     group.add(im);
   }
-  // Stunt ramps: tilted slabs on the road shoulders, clear of junctions
+  // Stunt ramps: solid wedges on the road shoulders, clear of junctions
   // and mission lines. The axis is the launch direction — 'z' launches
   // along the north-south roads, 'x' along the east-west ones.
+  // v9 iteration 6: the old ramps were tilted BOXES (0.35 rad) — the
+  // high edge floated ~0.6 m above the road, and at night the slab read
+  // as a yellow beam spanning the road. A ramp is now a solid wedge: a
+  // triangular prism whose base sits flat on the ground (0 at the low
+  // edge, 1.1 m at the high edge, the same launch height as before),
+  // with a hazard-chevron slope so it reads as a ramp, not a plank.
+  // The footprint (5 x 4), positions and axes are unchanged, so the
+  // positional stunt detection (game.js) and the probe stunt test are
+  // unaffected. The wedge is built once and shared by all six ramps.
+  const rampMeshes = [];
+  const wedgeShape = new THREE.Shape();
+  wedgeShape.moveTo(-2.5, 0);
+  wedgeShape.lineTo(2.5, 0);
+  wedgeShape.lineTo(2.5, 1.1);
+  wedgeShape.closePath();
+  const wedgeGeo = new THREE.ExtrudeGeometry(wedgeShape, { depth: 4, bevelEnabled: false });
+  wedgeGeo.translate(0, 0, -2);
+  const chevronCanvas = document.createElement('canvas');
+  chevronCanvas.width = 128;
+  chevronCanvas.height = 128;
+  {
+    const cctx = chevronCanvas.getContext('2d');
+    cctx.fillStyle = '#d8a832';
+    cctx.fillRect(0, 0, 128, 128);
+    cctx.fillStyle = '#1a1a1a';
+    for (let i = -2; i < 4; i += 1) {
+      cctx.beginPath();
+      cctx.moveTo(i * 64, 128);
+      cctx.lineTo(i * 64 + 32, 128);
+      cctx.lineTo(i * 64 + 96, 0);
+      cctx.lineTo(i * 64 + 64, 0);
+      cctx.closePath();
+      cctx.fill();
+    }
+  }
+  const chevronTex = new THREE.CanvasTexture(chevronCanvas);
+  chevronTex.colorSpace = THREE.SRGBColorSpace;
+  chevronTex.wrapS = THREE.RepeatWrapping;
+  chevronTex.wrapT = THREE.RepeatWrapping;
+  const rampCapMat = new THREE.MeshStandardMaterial({ color: 0xd8a832, roughness: 0.6 });
+  const rampWallMat = new THREE.MeshStandardMaterial({ map: chevronTex, roughness: 0.6 });
   const ramps = cfg.stunts.ramps.map((r, i) => {
     const axis = r.axis || 'z';
-    const ramp = new THREE.Mesh(
-      new THREE.BoxGeometry(5, 0.5, 4),
-      new THREE.MeshStandardMaterial({ color: 0xd8a832, roughness: 0.6 }),
-    );
-    ramp.position.set(r.x, 0.25, r.z);
-    if (axis === 'x') ramp.rotation.z = 0.35;
-    else ramp.rotation.x = -0.35;
+    const ramp = new THREE.Mesh(wedgeGeo, [rampCapMat, rampWallMat]);
+    ramp.position.set(r.x, 0, r.z);
+    // The wedge's high edge is at local +x; axis 'z' ramps rotate -90
+    // deg about Y so the high edge faces +z (the launch direction).
+    if (axis === 'z') ramp.rotation.y = -Math.PI / 2;
     ramp.castShadow = true;
     group.add(ramp);
+    rampMeshes.push(ramp);
     return { x: r.x, z: r.z, axis };
   });
   // Destructible props (v9 iteration 4): lamp posts, hydrants, trash
@@ -2716,8 +2928,8 @@ export function buildCity(scene, rng, cfg) {
     seaUniforms.uSunColor.value.copy(sunColor);
   }
 
-  // Two seasons (v9 iteration 3): MUSIM HUJAN (odd days) keeps the rain,
-  // puddles, lamp pools and wet-street shine; MUSIM KEMARAU (even days)
+  // Two seasons (v9 iteration 3): RAINY SEASON (odd days) keeps the rain,
+  // puddles, lamp pools and wet-street shine; DRY SEASON (even days)
   // hides all of them and dries the streets out (roughness up, shine
   // gone), so the pink dusk stands clear. Pure function of the day —
   // deterministic, no rng.
@@ -2735,12 +2947,139 @@ export function buildCity(scene, rng, cfg) {
     wetApronMat.roughness = rainy ? 0.5 : 0.9;
   }
 
+  // v9 iteration 6 — placement audit: every prop the user caught
+  // standing in a road, plus the sign and ramp geometry, checked against
+  // the real road rectangles (each road line ±10 m, ±150 long). Pure
+  // geometry over the recorded layout — no rendering, no rng — so the
+  // probe can assert hard zeros. A rect touches a road only when the
+  // overlap depth exceeds 0.05 m, so a frontage flush to the sidewalk
+  // edge still passes; a trunk counts when its centre is on the road.
+  function placementAudit() {
+    group.updateMatrixWorld(true);
+    const roadHalf = W.roadWidth / 2; // 10
+    const roads = [];
+    for (const c of roadLines) {
+      roads.push({ axis: 'x', line: c, x0: c - roadHalf, x1: c + roadHalf, z0: -half, z1: half });
+      roads.push({ axis: 'z', line: c, z0: c - roadHalf, z1: c + roadHalf, x0: -half, x1: half });
+    }
+    const roadLabel = (r) => (r.axis === 'x' ? `x=${r.line}` : `z=${r.line}`);
+    const roadHitRect = (x0, x1, z0, z1) => {
+      let worst = null;
+      for (const r of roads) {
+        const ox = Math.min(x1, r.x1) - Math.max(x0, r.x0);
+        const oz = Math.min(z1, r.z1) - Math.max(z0, r.z0);
+        const d = Math.min(ox, oz);
+        if (d > 0.05 && (!worst || d > worst.depth)) {
+          worst = { road: roadLabel(r), depth: Math.round(d * 10) / 10 };
+        }
+      }
+      return worst;
+    };
+    const roadHitPoint = (x, z) => {
+      for (const r of roads) {
+        if (x >= r.x0 && x <= r.x1 && z >= r.z0 && z <= r.z1) return roadLabel(r);
+      }
+      return null;
+    };
+    const out = {
+      buildings: [], palms: [], trees: [], hydrants: [], bins: [],
+      stalls: [], signs: [], ramps: [],
+      counts: {
+        buildings: buildingRecords.length, palms: palmSpots.length,
+        trees: treeSpots.length, hydrants: hydrantSpots.length,
+        bins: binSpots.length, stalls: stallDefs.length,
+        signs: signRecords.length, ramps: rampMeshes.length,
+      },
+    };
+    for (const b of buildingRecords) {
+      const hit = roadHitRect(b.x - b.w / 2, b.x + b.w / 2, b.z - b.d / 2, b.z + b.d / 2);
+      if (hit) out.buildings.push({ x: b.x, z: b.z, w: b.w, d: b.d, h: b.h, style: b.style, ...hit });
+    }
+    for (const p of palmSpots) {
+      const road = roadHitPoint(p.x, p.z);
+      if (road) out.palms.push({ x: p.x, z: p.z, road });
+    }
+    for (const t of treeSpots) {
+      const road = roadHitPoint(t.x, t.z);
+      if (road) out.trees.push({ x: t.x, z: t.z, road });
+    }
+    for (const h of hydrantSpots) {
+      const road = roadHitPoint(h.x, h.z);
+      if (road) out.hydrants.push({ x: h.x, z: h.z, road });
+    }
+    for (const b of binSpots) {
+      const road = roadHitPoint(b.x, b.z);
+      if (road) out.bins.push({ x: b.x, z: b.z, road });
+    }
+    for (const def of stallDefs) {
+      // The counter is 3.2 x 1.6; the east stalls are rotated 90 deg.
+      const hx = def.side === 'E' ? 0.8 : 1.6;
+      const hz = def.side === 'E' ? 1.6 : 0.8;
+      const hit = roadHitRect(def.x - hx, def.x + hx, def.z - hz, def.z + hz);
+      if (hit) out.stalls.push({ x: def.x, z: def.z, ...hit });
+    }
+    for (const s of signRecords) {
+      // The pole must sit at the blade's end, not through its middle:
+      // the pole-to-blade-centre distance along the blade axis must be
+      // at least the blade half-length (1.6) minus a 0.3 tolerance.
+      const along = Math.abs((s.bladeX - s.px) * s.axisX + (s.bladeZ - s.pz) * s.axisZ);
+      const poleOffset = Math.round(along * 100) / 100;
+      // A lamp pole within 1 m of the blade segment can hide the text
+      // from an approach angle, so that is flagged too.
+      let lampNear = null;
+      for (const l of lampSpots) {
+        const dx = l.x - s.bladeX;
+        const dz = l.z - s.bladeZ;
+        const a = dx * s.axisX + dz * s.axisZ;
+        const perp = Math.abs(dx * (-s.axisZ) + dz * s.axisX);
+        if (Math.abs(a) <= s.bladeHalf + 0.5 && perp < 1.0) {
+          lampNear = { x: l.x, z: l.z, perp: Math.round(perp * 100) / 100 };
+          break;
+        }
+      }
+      if (poleOffset < 1.3 || lampNear) {
+        out.signs.push({ name: s.name, x: s.x, z: s.z, poleOffset, lampNear });
+      }
+    }
+    for (let i = 0; i < rampMeshes.length; i += 1) {
+      const mesh = rampMeshes[i];
+      const pos = mesh.geometry.attributes.position;
+      const v = new THREE.Vector3();
+      let minY = Infinity;
+      const verts = [];
+      for (let k = 0; k < pos.count; k += 1) {
+        v.fromBufferAttribute(pos, k).applyMatrix4(mesh.matrixWorld);
+        if (v.y < minY) minY = v.y;
+        verts.push({ x: v.x, y: v.y, z: v.z });
+      }
+      // Grounded = a vertex at ground level (y < 0.05) near each of the
+      // four footprint corners: a solid wedge has its bottom face on
+      // the ground; a tilted slab only touches at its low edge and its
+      // high corners float ~0.6 m up.
+      const bb = new THREE.Box3().setFromObject(mesh);
+      const corners = [
+        [bb.min.x, bb.min.z], [bb.min.x, bb.max.z],
+        [bb.max.x, bb.min.z], [bb.max.x, bb.max.z],
+      ];
+      const grounded = corners.every(([cx, cz]) => verts.some((p) => p.y < 0.05 && Math.hypot(p.x - cx, p.z - cz) < 0.8));
+      const r = ramps[i];
+      if (minY < -0.02 || !grounded) {
+        out.ramps.push({ x: r.x, z: r.z, axis: r.axis, minY: Math.round(minY * 100) / 100, grounded });
+      }
+    }
+    return out;
+  }
+
   return {
     group, roadLines, blockCenters, landmarks, half, pitch, streetlights, heli,
     lightHeads, stallSpots, barrels, buildingCount: buildingRecords.length, setSeason,
     // v9 iteration 4: destructible props, stunt ramps, instanced counts,
     // and the wind/sea updaters for the day cycle.
     destructibles, ramps, updateWind, updateSea, islandGate,
+    // v9 iteration 6: the placement audit + the raw layout records it
+    // reads, so the probe asserts against the real built city.
+    placementAudit, buildingRecords, palmSpots, treeSpots, hydrantSpots,
+    binSpots, stallDefs, signRecords, rampMeshes,
     instancedCounts: {
       palms: palmSpots.length,
       lamps: lampSpots.length,

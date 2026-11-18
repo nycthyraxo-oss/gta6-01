@@ -160,7 +160,7 @@ export function createHud() {
 
     // Bottom-left: district over the minimap, health / armour / rep bars
     // under it, package count below that. v9 iteration 5 (§3/§5): the
-    // street underfoot leads the district ("Jalan Fuego · DOWNTOWN"),
+    // street underfoot leads the district ("Fuego Ave · DOWNTOWN"),
     // the REP bar fills toward the NEXT rank, the rank name shows, and
     // the medals + skill levels get their own lines.
     districtEl.textContent = state.street ? `${state.street} · ${state.district || ''}` : (state.district || '');
@@ -188,7 +188,10 @@ export function createHud() {
     }
     if (skillsEl && state.skills) {
       const s = state.skills;
-      skillsEl.textContent = `DRV ${s.driving} · STA ${s.stamina} · AIM ${s.aim} · STL ${s.stealth} · INF ${s.influence} · STR ${s.street}`;
+      // v9 iteration 6: six stats on one line clipped past the 200 px
+      // minimap column. Two lines of three, with the <br> rendered by
+      // the pre-line style on #hud-skills (see index.html).
+      skillsEl.textContent = `DRV ${s.driving} · STA ${s.stamina} · AIM ${s.aim}\nSTL ${s.stealth} · INF ${s.influence} · STR ${s.street}`;
     }
 
     // Bottom-right speedo: big speed, car name + gear, vehicle condition,
@@ -251,7 +254,7 @@ export function createHud() {
   // The shared map base: sea, sand, roads, blocks, parks, landmarks. Both
   // the minimap and the full city map draw from it, so they can never drift.
   // `half` is the map's half-range in metres: the minimap covers ±190
-  // (reaches the sea), the big map ±300 (reaches Pulau Fuego).
+  // (reaches the sea), the big map ±300 (reaches Fuego Island).
   function drawMapBase(ctx, size, world, half) {
     const toMap = (x, z) => [((x + half) / (half * 2)) * size, ((z + half) / (half * 2)) * size];
     ctx.fillStyle = 'rgba(10, 18, 26, 0.92)';
@@ -266,7 +269,7 @@ export function createHud() {
     ctx.fillStyle = '#e6d3a3';
     ctx.fillRect(Math.max(0, sandX), 0, Math.max(0, seaX - sandX), size);
     // Fuego Pier (x 168–209, z 98–102) + causeway (x 209–222) as one
-    // sand-coloured line, and Pulau Fuego (x 222–272, z 72–128) as a
+    // sand-coloured line, and Fuego Island (x 222–272, z 72–128) as a
     // grass island with a sand rim. On the minimap the island is
     // off-canvas and the canvas clips it; the big map shows it whole.
     const [pier0x, pierZ] = toMap(168, 100);
@@ -348,12 +351,18 @@ export function createHud() {
   // for Pay 'n' Spray. The big map labels them too. v9 iteration 5: the
   // spray label hangs BELOW its marker — on the old right-hand side it
   // printed on top of the East Docks venue label (same z row).
+  // v9 iteration 6: returns the label + diamond rects (when label is
+  // true) so the big map's greedy placer can register them before it
+  // places district/venue labels — the iter6 map shot showed PAY 'N'
+  // SPRAY printed over Fuego Island because the placer could not see
+  // this fixed label.
   function drawShops(ctx, toMap, world, label) {
-    if (!world.shops) return;
+    if (!world.shops) return [];
     const defs = [
       { s: world.shops.gun, color: '#8aff5a', name: 'AMMU-NATION', lx: 8, ly: 4, align: 'left' },
       { s: world.shops.spray, color: '#ff5aff', name: "PAY 'N' SPRAY", lx: 8, ly: 22, align: 'left' },
     ];
+    const rects = [];
     for (const def of defs) {
       const { s, color, name } = def;
       const [mx, mz] = toMap(s.x, s.z);
@@ -371,8 +380,14 @@ export function createHud() {
         ctx.textAlign = def.align;
         ctx.fillText(name, mx + def.lx, mz + def.ly);
         ctx.textAlign = 'left';
+        // Collision rects: the label text (baseline at mz+ly, 13px font)
+        // and the diamond itself, so no greedy label covers either.
+        const w = ctx.measureText(name).width;
+        rects.push({ x: mx + def.lx - 2, y: mz + def.ly - 11, w: w + 4, h: 18 });
+        rects.push({ x: mx - 6, y: mz - 6, w: 12, h: 12 });
       }
     }
+    return rects;
   }
 
   function drawMinimap(world) {
@@ -467,10 +482,14 @@ export function createHud() {
   function drawBigMap(world) {
     if (!bigCtx) return;
     const size = 640;
-    const half = world.half + 150; // ±300: reaches Pulau Fuego (x 272).
+    const half = world.half + 150; // ±300: reaches Fuego Island (x 272).
     const ctx = bigCtx;
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     const toMap = drawMapBase(ctx, size, world, half);
+    // The search-zone header's rect, captured so the greedy label placer
+    // below can register it — the iter6 map shot showed PALM GARDENS
+    // printed over this header because the placer could not see it.
+    let searchHeaderRect = null;
     if (world.searchZone) {
       const [zx, zy] = toMap(world.searchZone.x, world.searchZone.z);
       const zr = (world.searchZone.r / (half * 2)) * size;
@@ -488,12 +507,65 @@ export function createHud() {
       const header = 'SEARCH ZONE — leave it to lose the cops';
       const hw = ctx.measureText(header).width;
       const hx = Math.max(8, Math.min(zx - hw / 2, size - hw - 8));
-      ctx.fillText(header, hx, Math.max(24, zy - zr + 22));
+      const hy = Math.max(24, zy - zr + 22);
+      ctx.fillText(header, hx, hy);
+      searchHeaderRect = { x: hx - 2, y: hy - 14, w: hw + 4, h: 20 };
     }
     drawGpsRoute(ctx, toMap, world);
-    // District names, from the config table: label at each district's
-    // centre, clamped inside the canvas so long names near the east edge
-    // (FUEGO BEACHFRONT) do not run off it. Three labels are moved off
+    // v9 iteration 6 — label placement is greedy and collision-free:
+    // every label is a job with a priority (districts first, venues
+    // second) and a preferred spot; the placer tries the preferred spot,
+    // then nudges up / down / sideways in steps, and DROPS the label if
+    // no free spot exists — a dropped venue label beats two labels
+    // printed on top of each other. Markers stay at their landmarks;
+    // only the text moves.
+    const placed = [];
+    // Fixed labels register FIRST, before any greedy label is placed:
+    // the search-zone header (drawn above) and the shop labels (drawn
+    // here, moved up from the end of the function) — both are fixed
+    // spots the placer must route around. Without this the iter6 map
+    // shot showed PALM GARDENS over the search header and PAY 'N'
+    // SPRAY over Fuego Island.
+    if (searchHeaderRect) placed.push(searchHeaderRect);
+    for (const r of drawShops(ctx, toMap, world, true)) placed.push(r);
+    // fillText draws with the BASELINE at y, so the collision rect is
+    // [px, py - 14, w, 20] (14 px above the baseline, 6 below).
+    function placeLabel(text, font, mx, mz, ox, oy) {
+      ctx.font = font;
+      const w = ctx.measureText(text).width;
+      const h = 20;
+      // Candidate baselines, preferred first, then nudges. The left-side
+      // nudges (for edge labels like Fuego Island, whose preferred spot
+      // runs off the canvas) also try up/down, and the long vertical
+      // nudges clear a neighbour's whole label height.
+      const cands = [
+        [mx + ox, mz + oy],
+        [mx + ox, mz + oy - 20],
+        [mx + ox, mz + oy + 20],
+        [mx + ox - w - 10, mz + oy],
+        [mx + ox + 10, mz + oy],
+        [mx + ox, mz + oy - 40],
+        [mx + ox, mz + oy + 40],
+        [mx + ox - w - 10, mz + oy - 20],
+        [mx + ox - w - 10, mz + oy + 20],
+        [mx + ox, mz + oy - 60],
+        [mx + ox, mz + oy + 60],
+      ];
+      for (const [px, py] of cands) {
+        const top = py - 14;
+        if (px < 4 || px + w > size - 4 || top < 4 || py > size - 4) continue;
+        let hit = false;
+        for (const r of placed) {
+          if (px < r.x + r.w + 4 && px + w + 4 > r.x && top < r.y + r.h + 4 && top + h + 4 > r.y) { hit = true; break; }
+        }
+        if (hit) continue;
+        placed.push({ x: px, y: top, w, h });
+        ctx.fillText(text, px, py);
+        return true;
+      }
+      return false;
+    }
+    // District names, from the config table. Three labels are moved off
     // their centre because a named venue sits there: BEACHFRONT goes to
     // the north end of the strip (short name, clear of the boardwalk),
     // PALM GARDENS goes to the park's far corner (clear of the safehouse),
@@ -503,7 +575,6 @@ export function createHud() {
       'palm-gardens': { x: -135, z: -135 },
     };
     ctx.fillStyle = 'rgba(255, 255, 255, 0.75)';
-    ctx.font = 'bold 17px system-ui, sans-serif';
     for (const d of DISTRICTS) {
       if (d.id === 'downtown') continue; // the fallback has no centre worth labelling
       const pos = LABEL_POS[d.id] || d;
@@ -511,38 +582,39 @@ export function createHud() {
       const cz = (pos.z0 !== undefined ? (pos.z0 + pos.z1) / 2 : pos.z);
       const name = pos.name || d.name;
       const [mx, mz] = toMap(cx, cz);
+      // Centre the text on the district centre: measure first, then
+      // offset by half the width (placeLabel takes a top-left offset).
+      ctx.font = 'bold 17px system-ui, sans-serif';
       const w = ctx.measureText(name).width;
-      const tx = Math.max(8, Math.min(mx - w / 2, size - w - 8));
-      ctx.fillText(name, tx, mz);
+      placeLabel(name, 'bold 17px system-ui, sans-serif', mx, mz, -w / 2, 0);
     }
     // DOWNTOWN label, placed by hand in the south-centre, below the
     // hospital venue label so the two never print on top of each other.
     {
       const [mx, mz] = toMap(14, 135);
-      ctx.fillText('DOWNTOWN', mx - 40, mz);
+      placeLabel('DOWNTOWN', 'bold 17px system-ui, sans-serif', mx, mz, -40, 0);
     }
     // Named venues. Labels near the east edge are right-aligned so they
     // do not run off the canvas; the tower label drops below the TOWER
     // PLAZA district name instead of printing on top of it.
-    ctx.font = 'bold 15px system-ui, sans-serif';
     for (const key of Object.keys(world.landmarks)) {
       const lm = world.landmarks[key];
       const [mx, mz] = toMap(lm.x, lm.z);
       ctx.fillStyle = '#8ec9ee';
       ctx.fillRect(mx - 3, mz - 3, 6, 6);
       ctx.fillStyle = '#eaf4ff';
+      ctx.font = 'bold 15px system-ui, sans-serif';
+      const w = ctx.measureText(lm.name).width;
       if (key === 'tower') {
-        ctx.fillText(lm.name, mx + 8, mz + 34);
+        placeLabel(lm.name, 'bold 15px system-ui, sans-serif', mx, mz, 8, 34);
       } else if (key === 'garage') {
         // Below the marker: the GPS route's last leg runs into the garage
         // from the side, and the label used to sit on the dashed line.
-        ctx.fillText(lm.name, mx + 8, mz + 22);
+        placeLabel(lm.name, 'bold 15px system-ui, sans-serif', mx, mz, 8, 22);
       } else if (mx > size * 0.72) {
-        ctx.textAlign = 'right';
-        ctx.fillText(lm.name, mx - 8, mz + 5);
-        ctx.textAlign = 'left';
+        placeLabel(lm.name, 'bold 15px system-ui, sans-serif', mx, mz, -w - 8, 5);
       } else {
-        ctx.fillText(lm.name, mx + 8, mz + 5);
+        placeLabel(lm.name, 'bold 15px system-ui, sans-serif', mx, mz, 8, 5);
       }
     }
     // Mission marker.
@@ -559,7 +631,8 @@ export function createHud() {
       ctx.fill();
     }
     drawVisionCones(ctx, toMap, world, size, half);
-    drawShops(ctx, toMap, world, true);
+    // (drawShops moved up: its labels register before the greedy labels
+    // are placed, so they cannot be printed over.)
     // v9 iteration 5 (§2/§3): courier pickups (gold rings — the active
     // job's drop is a green ring), race starts (white squares) and
     // medals (gold dots, once Street Sense is 2+). Finished jobs and

@@ -130,30 +130,33 @@ export const CONFIG = {
     spray: { x: 96, z: 112, name: "PAY 'N' SPRAY" },
     // v9 iteration 5: the outfit shop — a beachfront boutique on the
     // boardwalk that sells shirt colours (cosmetic player colours).
-    outfit: { x: 160, z: -28, name: 'BUTIK NEON' },
+    outfit: { x: 160, z: -28, name: 'NEON BOUTIQUE' },
   },
-  // v9 iteration 5: street names — our own Indonesian names, one per road
-  // line. Avenues run north-south (constant x), streets east-west
-  // (constant z). The HUD reads "Jalan Fuego · DOWNTOWN".
+  // v9 iteration 5: street names — our own names, one per road line.
+  // Avenues run north-south (constant x), streets east-west
+  // (constant z). The HUD reads "Fuego Ave · DOWNTOWN".
+  // v9 iteration 6: English names — the Indonesian "Jalan ..." set read
+  // as the whole game being in Indonesian.
   streetNames: {
     avenues: {
-      '-140': 'Jalan Pelabuhan', '-84': 'Jalan Merdeka', '-28': 'Jalan Kenanga',
-      '28': 'Jalan Fuego', '84': 'Jalan Mawar', '140': 'Jalan Pantai',
+      '-140': 'Harbor Ave', '-84': 'Liberty Ave', '-28': 'Jasmine Ave',
+      '28': 'Fuego Ave', '84': 'Rose Ave', '140': 'Beach Ave',
     },
     streets: {
-      '-140': 'Jalan Garuda', '-84': 'Jalan Melati', '-28': 'Jalan Coral',
-      '28': 'Jalan Anggrek', '84': 'Jalan Sudirman', '140': 'Jalan Bahari',
+      '-140': 'Garuda St', '-84': 'Melati St', '-28': 'Coral St',
+      '28': 'Orchid St', '84': 'Sudirman St', '140': 'Seaside St',
     },
   },
   // v9 iteration 5: REP ranks — named titles, our own. Each rank unlocks
   // jobs + gear (race 2 needs REP 20, race 3 REP 50, The Big Score REP 30).
+  // v9 iteration 6: English rank names.
   repRanks: [
-    { rep: 0, name: 'ANAK BARU' },
-    { rep: 25, name: 'JALANAN' },
-    { rep: 60, name: 'PEMAIN' },
-    { rep: 120, name: 'JAGOAN' },
-    { rep: 200, name: 'RAJA JALAN' },
-    { rep: 350, name: 'LEGENDA COSTA' },
+    { rep: 0, name: 'NEW KID' },
+    { rep: 25, name: 'HUSTLER' },
+    { rep: 60, name: 'PLAYER' },
+    { rep: 120, name: 'HOTSHOT' },
+    { rep: 200, name: 'KING OF THE STREETS' },
+    { rep: 350, name: 'COSTA LEGEND' },
   ],
   // v9 iteration 5: six skills, each 0-5, each with a small real effect.
   // Driving +2% top speed/level, Stamina +3% run speed/level, Aim +5%
@@ -183,7 +186,7 @@ export const CONFIG = {
   // grand tour around the whole east side (REP 50).
   races: [
     {
-      name: 'Jalan Fuego Sprint', repReq: 0, timeLimit: 75, prize: 300, rep: 5,
+      name: 'Fuego Ave Sprint', repReq: 0, timeLimit: 75, prize: 300, rep: 5,
       start: { x: -28, z: 84 },
       checkpoints: [{ x: 84, z: 84 }, { x: 84, z: -28 }],
       finish: { x: -28, z: -28 },
@@ -195,7 +198,7 @@ export const CONFIG = {
       finish: { x: 28, z: 28 },
     },
     {
-      name: 'Pantai Grand Tour', repReq: 50, timeLimit: 90, prize: 800, rep: 12,
+      name: 'Beach Grand Tour', repReq: 50, timeLimit: 90, prize: 800, rep: 12,
       start: { x: 84, z: 84 },
       checkpoints: [{ x: 84, z: -140 }, { x: -140, z: -140 }],
       finish: { x: -140, z: 84 },
@@ -205,11 +208,11 @@ export const CONFIG = {
   // the marker, deliver before the clock runs out. REP-gated like the
   // races: job 2 needs REP 10, job 3 needs REP 25.
   deliveries: [
-    { name: 'Kopi untuk Marla', repReq: 0, timeLimit: 90, prize: 200,
+    { name: 'Coffee for Marla', repReq: 0, timeLimit: 90, prize: 200,
       pickup: { x: -84, z: 28 }, drop: { x: 0, z: 112 } },
-    { name: 'Paket Mercado', repReq: 10, timeLimit: 75, prize: 250,
+    { name: 'Mercado Package', repReq: 10, timeLimit: 75, prize: 250,
       pickup: { x: 56, z: -84 }, drop: { x: 56, z: -56 } },
-    { name: 'Kirim ke Garasi', repReq: 25, timeLimit: 120, prize: 400,
+    { name: 'Delivery to the Garage', repReq: 25, timeLimit: 120, prize: 400,
       pickup: { x: 158, z: 0 }, drop: { x: -112, z: 84 } },
   ],
   // v9 iteration 5: the causeway + island district east of Fuego Pier.
@@ -217,7 +220,7 @@ export const CONFIG = {
   island: {
     x0: 222, x1: 272, z0: 72, z1: 128,
     gate: { x: 209, z: 100 },
-    name: 'Pulau Fuego',
+    name: 'Fuego Island',
   },
   // v9 iteration 5: graphics presets. LOW drops the pixel ratio, bloom
   // and shadows and thins the traffic + crowd; HIGH pushes them up.
