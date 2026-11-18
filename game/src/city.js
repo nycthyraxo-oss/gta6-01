@@ -553,9 +553,11 @@ export function buildCity(scene, rng, cfg) {
     group.add(box(4.5, 0.18, 0.1, 0x2a2018, winX, 1.4, landmarks.garage.z - 7.6));
   }
   // Paved forecourt apron in front of the shopfront, with parking bays.
-  group.add(flat(20, 12, 0x8a7a68, landmarks.garage.x, 70, 0.05));
+  // V8 (reviewer fix 2): paved grey 0x6a6a66, not dirt-brown, so the
+  // forecourt reads as paving at a glance against the ground plane.
+  group.add(flat(20, 12, 0x6a6a66, landmarks.garage.x, 70, 0.05));
   for (const bx of [-118, -112, -106]) {
-    group.add(flat(0.3, 4, 0xe8e4d8, bx, 68, 0.07));
+    group.add(flat(0.5, 4, 0xffffff, bx, 68, 0.07));
   }
   // Oil stains on the apron: dark flat discs, slightly above the paving.
   const stainMat = new THREE.MeshStandardMaterial({ color: 0x241d18, roughness: 0.4, metalness: 0.2 });

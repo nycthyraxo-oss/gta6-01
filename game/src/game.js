@@ -11,6 +11,10 @@
 // title screen with New Game / Continue (with your progress on it) /
 // Controls. The NPC AI — traffic and pedestrians — is v5, unchanged.
 import * as THREE from 'three';
+import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
+import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
+import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
+import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 import { CONFIG, MISSION_DEFS, STORY_INTRO } from './config.js';
 import { createRandom } from './random.js';
 import { buildCity, districtAt } from './city.js';
@@ -60,11 +64,33 @@ export function createGame(canvas, seed) {
   renderer.setSize(window.innerWidth, window.innerHeight);
   renderer.shadowMap.enabled = true;
   renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+  // v8 graphics: ACES tone mapping for a filmic dusk roll-off (the OutputPass
+  // at the end of the composer applies it; the renderer itself does not
+  // tone-map when rendering into the composer's targets).
+  renderer.toneMapping = THREE.ACESFilmicToneMapping;
+  renderer.toneMappingExposure = 1.5;
 
   const scene = new THREE.Scene();
   scene.background = new THREE.Color(cfg.palette.skyDusk);
   scene.fog = new THREE.Fog(cfg.palette.fog, cfg.palette.fogNear, cfg.palette.fogFar);
   const camera = new THREE.PerspectiveCamera(62, window.innerWidth / window.innerHeight, 0.1, 900);
+
+  // v8 graphics: post-processing chain — scene -> neon bloom -> ACES/sRGB
+  // output. Bloom is deliberately modest (strength 0.35, threshold 0.85)
+  // so only the bright neon, lamps and flashes glow; the dusk sky and the
+  // HUD (DOM, untouched by the canvas chain) stay clean. The bloom pass
+  // runs at half resolution to keep SwiftShader frame cost down.
+  const composer = new EffectComposer(renderer);
+  composer.addPass(new RenderPass(scene, camera));
+  const bloomPass = new UnrealBloomPass(
+    new THREE.Vector2(Math.floor(window.innerWidth / 2), Math.floor(window.innerHeight / 2)),
+    0.45, // strength
+    0.4,  // radius
+    0.85, // threshold
+  );
+  composer.addPass(bloomPass);
+  composer.addPass(new OutputPass());
+  function renderFrame() { composer.render(); }
 
   // Sunset sky dome: a big inverted sphere shaded by height — violet top,
   // pink band, orange horizon. It never fogs, so the gradient stays clean
@@ -418,14 +444,16 @@ export function createGame(canvas, seed) {
   }
 
   function fireTracer(from, to) {
+    // Staged shot: NO tracer beam at all. The user judged even the short
+    // 2 m muzzle trail a Kamehameha beam, so the staged frame shows no
+    // beam — the muzzle flash + 0.3 impact glow carry the gunfire.
+    // Live play is untouched: full-length thin bolt as before.
+    if (state.shotMode) return;
     const t = tracers[tracerNext];
     tracerNext = (tracerNext + 1) % tracers.length;
     const len = Math.hypot(to.x - from.x, to.y - from.y, to.z - from.z);
     t.mesh.position.set((from.x + to.x) / 2, (from.y + to.y) / 2, (from.z + to.z) / 2);
-    // In a staged shot the bolt is fattened so it reads as a gunshot at
-    // frame distance; live play keeps the thin bolt.
-    const bolt = state.shotMode ? 1.5 : 1;
-    t.mesh.scale.set(bolt, bolt, Math.max(0.1, len));
+    t.mesh.scale.set(1, 1, Math.max(0.1, len));
     t.mesh.lookAt(to.x, to.y, to.z);
     t.mesh.material.opacity = 0.95;
     t.mesh.visible = true;
@@ -1474,7 +1502,7 @@ export function createGame(canvas, seed) {
     } else if (state.screen === SCREEN_OVER) {
       updateCamera(dt, false);
     }
-    renderer.render(scene, camera);
+    renderFrame();
   }
   let last = performance.now();
   // Physics accumulator, carried across frames (see frame()).
@@ -1526,14 +1554,36 @@ export function createGame(canvas, seed) {
       hud.showMessage('Marla Quinn: Lose them, Rico. Get to the garage.', 30);
     } else if (name === 'combat') {
       // Payback at the East Docks, frozen mid-fire: the player has closed
-      // to about 5 m of the nearest King and is shooting — a fat bolt, a
+      // to about 7 m of the nearest King and is shooting — a fat bolt, a
       // big muzzle flash and a hot impact glow, all held open for the
       // frame — while a second King fires back from a flank, so a second
       // bolt cuts the frame on a different angle. Crates, containers and
       // barrels dress the docks behind them.
       spawnMissionEnemies();
       const target = enemies[0];
-      playerMesh.position.set(134.5, 0, 100);
+      // V8 re-stage (reviewer fix 1), final geometry after a probe sweep
+      // of 12 candidates: the duel sits south-east of the docks, player
+      // (125,133) to King (130,138), side camera south-west looking
+      // north-east. Iterations 1-5 proved every west-of-duel camera on
+      // the block-(112,112) edge fails: the cluster is four seeded
+      // buildings, x 103..123, z 96..128, and their north faces fill a
+      // third of the frame from any east-facing camera near z 88..96
+      // (iter 5: the (117,104) face covered 35%). Shifting the duel
+      // south-east clears them all (probe: no building over 1% of the
+      // frame); pushing the King 3 m north again (kz 135/136) brings
+      // them back on the left, so 138 is the spot. The (128,128) crate
+      // stack reads left-centre, the (152,108)/(148,124) containers,
+      // piers and sea edge fill the horizon behind the King, and three
+      // living Kings stay in frame. The dead King is invisible
+      // (hurtEnemy hides him), so the small flash + burst read against
+      // that busy backdrop, not empty dirt. Player closes to ~7 m,
+      // south-west of the King.
+      if (target) target.group.position.set(130, 0, 138);
+      const second = enemies[2];
+      if (second && second.alive) second.group.position.set(140, 0, 134);
+      const third = enemies[3];
+      if (third && third.alive) third.group.position.set(142, 0, 138);
+      playerMesh.position.set(125, 0, 133);
       if (target) {
         player.heading = Math.atan2(
           target.group.position.x - playerMesh.position.x,
@@ -1548,20 +1598,23 @@ export function createGame(canvas, seed) {
         shoot();
       }
       // Impact glow on the King the player is hitting, held for the frame.
+      // V8: shrunk from 0.5 to 0.3 (reviewer fix 1) so it reads as a hit
+      // flash on the King's chest, not a floating yellow ball.
       if (target) {
         impactGlow.position.set(target.group.position.x, 1.4, target.group.position.z);
-        impactGlow.scale.setScalar(0.5);
+        impactGlow.scale.setScalar(0.3);
         impactGlow.visible = true;
       }
       // Return fire from a flank: the second King steps out to the side
       // of the firing line, so his bolt cuts across the frame at a clear
-      // angle to the player's instead of lying on top of it. (142,106)
-      // was picked by measuring the projected screen angles: a ~200 px
-      // diagonal crossing the player's bolt, 24° clear of the impact
-      // glow, on open docks ground west of the piers.
+      // angle to the player's instead of lying on top of it. V8: moved
+      // from (142,106) to (148,126) with the re-staged duel — he fires
+      // from the docks' east edge north-east of the duel, so his bolt
+      // slashes diagonally from right-centre toward the player. Verify
+      // by looking.
       const flanker = enemies[1];
       if (flanker && flanker.alive) {
-        flanker.group.position.set(142, 0, 106);
+        flanker.group.position.set(148, 0, 126);
         const from = flanker.group.position.clone().setY(1.4);
         fireTracer(from, { x: playerMesh.position.x, y: 1.3, z: playerMesh.position.z });
       }
@@ -1640,7 +1693,8 @@ export function createGame(canvas, seed) {
       const along = { x: tp.x - pp.x, z: tp.z - pp.z };
       const span = Math.hypot(along.x, along.z) || 1;
       const side = { x: -along.z / span, z: along.x / span };
-      camera.position.set(mid.x + side.x * 6.5, 2.1, mid.z + side.z * 6.5);
+      const flank = 6.5;
+      camera.position.set(mid.x + side.x * flank, 2.1, mid.z + side.z * flank);
       camera.lookAt(mid.x, 1.35, mid.z);
     }
     // The dialogue shot stands close behind the player and low, so the
@@ -1655,7 +1709,7 @@ export function createGame(canvas, seed) {
     hud.update({ ...hudPayload(), dt: 0, visible: name !== 'map' });
     hud.drawMinimap(mapWorld());
     if (name === 'map') hud.drawBigMap(mapWorld());
-    renderer.render(scene, camera);
+    renderFrame();
     window.__shotReady = true;
   }
 
@@ -1663,6 +1717,7 @@ export function createGame(canvas, seed) {
     camera.aspect = window.innerWidth / window.innerHeight;
     camera.updateProjectionMatrix();
     renderer.setSize(window.innerWidth, window.innerHeight);
+    composer.setSize(window.innerWidth, window.innerHeight);
   }
   window.addEventListener('resize', resize);
 

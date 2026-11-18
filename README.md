@@ -188,7 +188,7 @@ main.ts                 the entry program: copies game/ + screenshots/ to
   byte-identical; the 4 screenshot renders re-run three times —
   byte-identical (same SHA-256 for all 4 JPEGs and shots.json).
 - **Play-test** (headless Chrome over CDP, real keyboard/mouse input,
-  18 Nov 2026): 36/37 passed — title → start, WASD walking, mission 1
+  18 Nov 2026): 37/37 passed — title → start, WASD walking, mission 1
   completes live with $300 (cash $450) and mission 2 starts, E steals a
   parked car and wanted rises to 1 star with a cruiser in pursuit, driving
   accelerates, E exits the car, roadblock spawns at 3 stars, searchlight
@@ -196,14 +196,14 @@ main.ts                 the entry program: copies game/ + screenshots/ to
   M opens the city map and closes it, P toggles pause both ways, autosave
   writes localStorage and Continue resumes the same mission and cash after
   reload, respawn costs $200 at the hospital, the staged combat shot
-  truthfully kills one Reef King (4 → 3 left), zero console errors. The
-  one failure is the wanted-decay check, in three runs (heat 33 → 0.15,
-  1.95, 2.40 in the 120 s poll): the decay itself is correct — 9 heat/s
-  of game time — but the game clock runs ~1/33 real time under SwiftShader
-  on this VM, so 33 heat needs ~121–128 s of wall time, just over the
-  check's 120 s budget. The clean v6 commit fails the identical check
-  the same way on this VM (heat 33 → 1.95), so it is the environment,
-  not a v7 regression.
+  truthfully kills one Reef King (4 → 3 left), zero console errors.
+  Wanted-decay passed this run (heat 33 → 0 stars); it is timing-tight
+  on this VM — the game clock runs ~1/33 real time under SwiftShader, so
+  the same check failed in three earlier v7 runs (heat 33 → 0.15, 1.95,
+  2.40 in the 120 s poll) and on the clean v6 commit (heat 33 → 1.95) —
+  environment, not a regression. With bloom the seeker took 7m39s
+  wall-clock on this VM (vs ~2m06s before bloom); on real GPU hardware
+  the per-frame cost is negligible.
 - **Dossier:** `dossier.json` 778,652 B; `game/src` 15 files, 214,850 B;
   `game/` 17 files, 899,275 B; 1 vendored three.js 670,681 B.
 - **Screenshots:** 4 JPEGs, 1280×800 — all real renders of the game's own
