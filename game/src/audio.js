@@ -1,5 +1,12 @@
 // Synthesized sound: every effect is built with the Web Audio API at run time,
 // so the game ships no audio files and makes no network request.
+//
+// v6: the radio is real. Three synthesized stations (Costa FM, Neon Night,
+// Playa Dub) with their own note sets and tempos — Q cycles them, and the
+// HUD speedo shows the station actually playing. Picking up a hidden
+// package gets its own little chime.
+import { RADIO_STATIONS } from './config.js';
+
 export function createAudio() {
   let ctx = null;
   let master = null;
@@ -10,8 +17,11 @@ export function createAudio() {
   let muted = false;
   let musicTimer = 0;
   let musicStep = 0;
+  let station = 0;
 
-  const NOTES = [220, 261.63, 329.63, 392, 329.63, 261.63, 196, 246.94];
+  function stationDef() {
+    return RADIO_STATIONS[station % RADIO_STATIONS.length];
+  }
 
   function ensure() {
     if (ctx) return true;
@@ -107,6 +117,10 @@ export function createAudio() {
     pickup() {
       blip(660, 0.12, 'sine', 0.25, 990);
     },
+    packageFound() {
+      blip(784, 0.1, 'sine', 0.25);
+      setTimeout(() => blip(1046, 0.18, 'sine', 0.25), 90);
+    },
     missionDone() {
       blip(523, 0.14, 'sine', 0.3);
       setTimeout(() => blip(659, 0.14, 'sine', 0.3), 130);
@@ -143,11 +157,21 @@ export function createAudio() {
       if (!ctx || muted) return;
       musicTimer -= dt;
       if (musicTimer > 0) return;
-      musicTimer = 0.42;
-      const n = NOTES[musicStep % NOTES.length];
+      const def = stationDef();
+      musicTimer = def.step;
+      const n = def.notes[musicStep % def.notes.length];
       musicStep += 1;
       blip(n, 0.4, 'triangle', 0.06);
       if (musicStep % 4 === 0) blip(n / 2, 0.5, 'sine', 0.08);
+    },
+    nextStation() {
+      station = (station + 1) % RADIO_STATIONS.length;
+      musicStep = 0;
+      musicTimer = 0;
+      return stationDef().name;
+    },
+    stationName() {
+      return stationDef().name;
     },
   };
 }

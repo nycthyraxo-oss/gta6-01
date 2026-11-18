@@ -1,12 +1,18 @@
 // Keyboard and mouse input. Held keys are read every frame; one-shot presses
-// (enter car, shoot, pause, mute, restart) are queued as flags and taken once,
-// so a press between two frames is never lost and never counted twice.
+// (enter car, shoot, pause, mute, restart, map, radio) are queued as flags
+// and taken once, so a press between two frames is never lost and never
+// counted twice. Enter / Space is the confirm key: it starts the game from
+// the title screen, so a keyboard-only player never needs the mouse.
 export const ACTION_ENTER = 1;
 export const ACTION_SHOOT = 2;
 export const ACTION_PAUSE = 4;
 export const ACTION_MUTE = 8;
 export const ACTION_RESTART = 16;
 export const ACTION_CONFIRM = 32;
+export const ACTION_MAP = 64;
+export const ACTION_RADIO = 128;
+export const ACTION_NIGHT = 256;
+export const ACTION_SPAWN_CAR = 512;
 
 const MOVE_KEYS = new Set(['KeyW', 'KeyA', 'KeyS', 'KeyD', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight']);
 
@@ -27,7 +33,11 @@ export function createInput(canvas) {
       if (event.code === 'KeyE') actions |= ACTION_ENTER;
       else if (event.code === 'KeyF') actions |= ACTION_SHOOT;
       else if (event.code === 'KeyP' || event.code === 'Escape') actions |= ACTION_PAUSE;
-      else if (event.code === 'KeyM') actions |= ACTION_MUTE;
+      else if (event.code === 'KeyN') actions |= ACTION_MUTE;
+      else if (event.code === 'KeyM') actions |= ACTION_MAP;
+      else if (event.code === 'KeyQ') actions |= ACTION_RADIO;
+      else if (event.code === 'KeyL') actions |= ACTION_NIGHT;
+      else if (event.code === 'KeyV') actions |= ACTION_SPAWN_CAR;
       else if (event.code === 'KeyR') actions |= ACTION_RESTART;
       else if (event.code === 'Enter' || event.code === 'Space') actions |= ACTION_CONFIRM;
     }

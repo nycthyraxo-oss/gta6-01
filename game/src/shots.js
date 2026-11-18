@@ -3,17 +3,19 @@
 // frame — and the game module does the staging; this file only names them
 // and the order they ship in, so shots.json and the dossier agree.
 //
-//   chase   — cover: driving a stolen car through traffic, wanted 3 stars,
-//             police in pursuit, minimap + mission objective on the HUD.
-//   street  — on foot at a downtown crossing, pedestrians and traffic.
-//   mission — Payback at the East Docks: four armed Reef Kings, the player
-//             closing in with the mission beacon overhead.
-//   dusk    — driving the boardwalk at dusk, tower and sea behind.
-export const SHOT_NAMES = ['chase', 'street', 'mission', 'dusk'];
+//   chase     — cover: driving a stolen car through traffic, wanted 3 stars,
+//               police in pursuit, minimap + mission objective on the HUD.
+//   combat    — on foot at the docks, firing at the Reef Kings: tracer,
+//               muzzle flash, enemies returning fire.
+//   map       — the full city map (M) over the game: districts, named
+//               venues, GPS route, search zone, current job.
+//   dialogue  — Homecoming briefing: Marla's dialogue bar with her
+//               portrait, the garage beacon and the player at the spawn.
+export const SHOT_NAMES = ['chase', 'combat', 'map', 'dialogue'];
 
 export const SHOT_FILES = [
   { name: '1-chase.jpg', query: '?shot=chase&seed=1' },
-  { name: '2-street.jpg', query: '?shot=street&seed=1' },
-  { name: '3-mission.jpg', query: '?shot=mission&seed=1' },
-  { name: '4-dusk.jpg', query: '?shot=dusk&seed=1' },
+  { name: '2-combat.jpg', query: '?shot=combat&seed=1' },
+  { name: '3-map.jpg', query: '?shot=map&seed=1' },
+  { name: '4-dialogue.jpg', query: '?shot=dialogue&seed=1' },
 ];

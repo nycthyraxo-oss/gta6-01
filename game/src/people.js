@@ -1,10 +1,12 @@
-// People: pedestrians who walk the sidewalks and flee gunfire, and the armed
-// Reef Kings who fight back during the Payback mission.
+// People: pedestrians who walk the sidewalks and flee gunfire, the armed
+// Reef Kings who fight back during the Payback mission, and the mercado
+// vendors who mind their stalls all day.
 //
-// v3: no more box-people. Every figure is built from rounded geometry —
+// v6: no more box-people. Every figure is built from rounded geometry —
 // capsule torso, sphere head with hair and eyes, cylinder arms and legs
 // with swinging joints — with varied height, skin, hair and clothing, so
-// the crowd reads as people instead of a flat render.
+// the crowd reads as people instead of a flat render. Vendors are the same
+// figure in an apron, standing at a stall instead of walking.
 import * as THREE from 'three';
 
 const SHIRT_COLORS = [0xd84a4a, 0x4a7ad8, 0x4ad87a, 0xd8c84a, 0x9a4ad8, 0xd88a4a, 0x4ad8c8, 0xe8e8e8];
@@ -34,7 +36,7 @@ function limb(r, len, material) {
   return mesh;
 }
 
-// Build one rounded person. opts: { height (0.9–1.1), hair }.
+// Build one rounded person. opts: { height (0.9–1.1), hair, apron }.
 // Returns the group; the animated joints live on group.userData
 // ({ rig, armL, armR, legL, legR }) so the walk cycle can swing them.
 export function makePersonMesh(shirt, pants, skin, opts = {}) {
@@ -77,6 +79,16 @@ export function makePersonMesh(shirt, pants, skin, opts = {}) {
   torso.position.y = 1.12;
   torso.castShadow = true;
   rig.add(torso);
+
+  // A vendor's apron: a flat cloth panel over the torso front.
+  if (opts.apron) {
+    const apron = new THREE.Mesh(
+      geo('apron', () => new THREE.BoxGeometry(0.5, 0.7, 0.06)),
+      mat(opts.apron, 0.9),
+    );
+    apron.position.set(0, 1.05, 0.24);
+    rig.add(apron);
+  }
 
   // Shoulders: small spheres so the torso meets the arms with a curve.
   for (const sx of [-0.3, 0.3]) {
@@ -155,7 +167,37 @@ export function spawnPedestrian(scene, rng, cfg, blockCenters) {
   };
 }
 
-export function updatePedestrian(p, dt, cfg, gunshotPos) {
+// A mercado vendor: same figure, apron on, standing behind a stall and
+// facing the street. Vendors do not walk — they are street life, not
+// traffic — but they still flee gunfire like everyone else.
+export function spawnVendor(scene, rng, x, z, facing) {
+  const mesh = makePersonMesh(
+    SHIRT_COLORS[Math.floor(rng.next() * SHIRT_COLORS.length)],
+    PANTS_COLORS[Math.floor(rng.next() * PANTS_COLORS.length)],
+    SKIN_TONES[Math.floor(rng.next() * SKIN_TONES.length)],
+    {
+      height: 0.95 + rng.next() * 0.1,
+      hair: HAIR_COLORS[Math.floor(rng.next() * HAIR_COLORS.length)],
+      apron: 0xe8e8e8,
+    },
+  );
+  mesh.position.set(x, 0, z);
+  mesh.rotation.y = facing;
+  scene.add(mesh);
+  return {
+    group: mesh,
+    heading: facing,
+    speed: 0,
+    state: 'vendor',
+    home: { x, z, facing },
+    fleeX: 0,
+    fleeZ: 0,
+    walkTimer: 0,
+    bob: rng.range(0, Math.PI * 2),
+  };
+}
+
+export function updatePedestrian(p, dt, cfg, gunshotPos, isRoad) {
   const pos = p.group.position;
   if (gunshotPos) {
     const dx = pos.x - gunshotPos.x;
@@ -177,17 +219,40 @@ export function updatePedestrian(p, dt, cfg, gunshotPos) {
       p.state = 'walk';
     }
     p.heading = Math.atan2(p.fleeX, p.fleeZ);
+  } else if (p.state === 'vendor') {
+    // Vendors stand their ground and mind the stall. They only move when
+    // they flee — and after the panic they walk back to the stall.
+    const home = p.home;
+    if (home) {
+      const dx = home.x - pos.x;
+      const dz = home.z - pos.z;
+      const d = Math.hypot(dx, dz);
+      if (d > 1) {
+        pos.x += (dx / d) * cfg.pedestrians.walkSpeed * dt;
+        pos.z += (dz / d) * cfg.pedestrians.walkSpeed * dt;
+        p.heading = Math.atan2(dx, dz);
+      } else {
+        p.heading = home.facing;
+      }
+    }
   } else {
     p.walkTimer -= dt;
     if (p.walkTimer <= 0) {
-      p.walkTimer = rngWalkTimer();
+      p.walkTimer = 2 + Math.random() * 6;
       p.heading += (Math.random() - 0.5) * 2.4;
     }
     const nx = pos.x + Math.sin(p.heading) * p.speed * dt;
     const nz = pos.z + Math.cos(p.heading) * p.speed * dt;
     if (Math.abs(nx) < 148 && Math.abs(nz) < 148) {
-      pos.x = nx;
-      pos.z = nz;
+      // Sidewalk walkers: a step onto a road turns the walker away instead
+      // of letting the crowd wander into traffic. (Fleeing pedestrians run
+      // anywhere — panic does not check the curb.)
+      if (isRoad && isRoad(nx, nz)) {
+        p.heading += Math.PI / 2;
+      } else {
+        pos.x = nx;
+        pos.z = nz;
+      }
     } else {
       p.heading += Math.PI;
     }
@@ -197,17 +262,13 @@ export function updatePedestrian(p, dt, cfg, gunshotPos) {
   const swing = Math.sin(p.bob) * (p.state === 'flee' ? 0.85 : 0.55);
   const joints = p.group.userData;
   if (joints.armL) {
-    joints.armL.rotation.x = swing;
-    joints.armR.rotation.x = -swing;
-    joints.legL.rotation.x = -swing;
-    joints.legR.rotation.x = swing;
+    joints.armL.rotation.x = p.state === 'vendor' ? 0.15 : swing;
+    joints.armR.rotation.x = p.state === 'vendor' ? 0.15 : -swing;
+    joints.legL.rotation.x = p.state === 'vendor' ? 0 : -swing;
+    joints.legR.rotation.x = p.state === 'vendor' ? 0 : swing;
     joints.rig.rotation.x = p.state === 'flee' ? 0.14 : 0.03;
   }
-  p.group.position.y = Math.abs(Math.sin(p.bob)) * 0.06;
-}
-
-function rngWalkTimer() {
-  return 2 + Math.random() * 6;
+  p.group.position.y = p.state === 'vendor' ? 0 : Math.abs(Math.sin(p.bob)) * 0.06;
 }
 
 export function spawnEnemy(scene, x, z, rng) {

@@ -1,5 +1,6 @@
-// Seeded random numbers. The city, the traffic and the pedestrians are all
-// built from one seed, so the same seed always builds the same Costa Fuego.
+// Seeded random numbers. The city, the traffic, the pedestrians and the
+// hidden packages are all built from one seed, so the same seed always
+// builds the same Costa Fuego — and the same screenshots.
 export function createRandom(seed) {
   let state = (seed >>> 0) || 1;
   function next() {
