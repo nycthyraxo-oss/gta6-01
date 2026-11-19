@@ -213,7 +213,7 @@ export const CONFIG = {
     { name: 'Mercado Package', repReq: 10, timeLimit: 75, prize: 250,
       pickup: { x: 56, z: -84 }, drop: { x: 56, z: -56 } },
     { name: 'Delivery to the Garage', repReq: 25, timeLimit: 120, prize: 400,
-      pickup: { x: 158, z: 0 }, drop: { x: -112, z: 84 } },
+      pickup: { x: 158, z: 0 }, drop: { x: -112, z: 112 } },
   ],
   // v9 iteration 5: the causeway + island district east of Fuego Pier.
   // The gate at the causeway mouth opens as the player approaches.

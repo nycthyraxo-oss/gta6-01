@@ -1,12 +1,19 @@
-// The HUD: a dense, readable layout — mission banner top-center (chapter,
-// stage, objective, target distance, clock), mode + wanted stars + cash +
-// weapon slots + the pursuer panel top-right, district name + live minimap
-// + health / armour / rep bars + package count bottom-left, big speedo with
-// car name, gear, vehicle condition and radio bottom-right, and a mission
-// dialogue bar (portrait + speaker + line) bottom-center. Big,
+// The HUD: a small minimizable quest panel top-left (chapter, objective,
+// distance, clock, stage bar, next job, dialogue log, weapon list), mode
+// + wanted stars + cash + current weapon + the pursuer panel top-right,
+// district name + live minimap + health / armour / rep bars + package
+// count bottom-left, big speedo with car name, gear, vehicle condition
+// and radio bottom-right, and a mission dialogue bar (portrait + speaker
+// + line) bottom-center that dismisses on keypress/click. Big,
 // high-contrast text so it stays readable when a screenshot is shrunk.
 //
-// v6: the banner carries a stage-progress bar and a NEXT line (the job
+// v9 iteration 7: the old top-centre mission banner and the big centre
+// message banner are gone — the objective lives in the quest panel, and
+// mission messages are a small transient toast. Nothing is deleted, only
+// tucked away: the full objective, NEXT job, dialogue log and weapon
+// list are all inside the panel (scrollable), and the dialogue box keeps
+// every line in the panel log when it dismisses.
+// v6: the banner carried a stage-progress bar and a NEXT line (the job
 // after this one), the clock shows the day as well as the time, the
 // top-right grows a pursuer panel (name, distance, status per chaser) and
 // a second weapon slot, the bottom-left grows armour and reputation bars
@@ -57,6 +64,11 @@ export function createHud() {
   const dialogueTextEl = document.getElementById('hud-dialogue-text');
   const spotlightEl = document.getElementById('hud-spotlight');
   const crosshairEl = document.getElementById('crosshair');
+  // v9 iteration 7: the quest panel (top-left) — the objective's new home.
+  const questEl = document.getElementById('hud-quest');
+  const questBodyEl = document.getElementById('hud-quest-body');
+  const questToggleEl = document.getElementById('hud-quest-toggle');
+  const questLogEl = document.getElementById('hud-quest-log');
   const minimap = document.getElementById('minimap');
   const mapCtx = minimap.getContext('2d');
   const bigmap = document.getElementById('bigmap');
@@ -74,6 +86,72 @@ export function createHud() {
   }
   let messageTimer = 0;
   let autosaveTimer = 0;
+
+  // v9 iteration 7 — quest panel collapse: the collapsed state persists
+  // across the session (localStorage), Q toggles it, the — button
+  // collapses it, and clicking the collapsed chip re-opens it.
+  const QUEST_COLLAPSED_KEY = 'costa-fuego.quest-collapsed';
+  let questCollapsed = false;
+  try {
+    questCollapsed = window.localStorage.getItem(QUEST_COLLAPSED_KEY) === '1';
+  } catch { /* private mode: the panel just defaults to expanded */ }
+  function applyQuestCollapsed() {
+    if (!questEl) return;
+    questEl.classList.toggle('collapsed', questCollapsed);
+    if (questToggleEl) questToggleEl.textContent = questCollapsed ? '+' : '—';
+  }
+  function setQuestCollapsed(collapsed) {
+    questCollapsed = !!collapsed;
+    try {
+      window.localStorage.setItem(QUEST_COLLAPSED_KEY, questCollapsed ? '1' : '0');
+    } catch { /* private mode: in-memory only */ }
+    applyQuestCollapsed();
+  }
+  function toggleQuest() {
+    setQuestCollapsed(!questCollapsed);
+  }
+  function isQuestCollapsed() {
+    return questCollapsed;
+  }
+  if (questToggleEl) questToggleEl.addEventListener('click', () => toggleQuest());
+  if (questEl) {
+    questEl.addEventListener('click', (event) => {
+      // Clicking the collapsed chip re-opens it — but the — / + button
+      // already toggles, so a button click must not fire twice for one
+      // click (that would collapse-then-reopen and look dead).
+      if (questCollapsed && event.target !== questToggleEl) toggleQuest();
+    });
+  }
+  applyQuestCollapsed();
+
+  // v9 iteration 7 — dialogue log: every conversation line (and every
+  // speaker-prefixed mission message) is kept here, newest last, so a
+  // dismissed dialogue box never loses the story. Cap 8 lines.
+  function logQuestLine(speaker, text) {
+    if (!questLogEl || !text) return;
+    const row = document.createElement('div');
+    if (speaker) {
+      const b = document.createElement('b');
+      b.textContent = `${speaker}: `;
+      row.appendChild(b);
+    }
+    row.appendChild(document.createTextNode(text));
+    questLogEl.appendChild(row);
+    while (questLogEl.children.length > 8) questLogEl.removeChild(questLogEl.firstChild);
+    if (questBodyEl) questBodyEl.scrollTop = questBodyEl.scrollHeight;
+  }
+
+  // v9 iteration 7 — dialogue dismiss: a fresh keypress or a click on
+  // the box hides it (the line stays in the quest log); a NEW line
+  // re-shows it once. After the conversation ends, the last line lingers
+  // 3 game-seconds, then fades.
+  let lastDialogueKey = null;
+  let dialogueDismissed = false;
+  let dialogueGoneFor = 0;
+  window.addEventListener('keydown', (event) => {
+    if (event.repeat) return;
+    dialogueDismissed = true;
+  });
 
   // "DAY 1 · 18:24" for the HUD clock and for time-skip messages — one
   // formatter, so the two can never drift apart.
@@ -96,6 +174,13 @@ export function createHud() {
     messageEl.textContent = text;
     messageEl.style.opacity = '1';
     messageTimer = seconds || 5;
+    // Speaker-prefixed mission messages ("Marla Quinn: ...") are
+    // dialogue too — they go in the quest log so the story survives the
+    // dismiss. Plain toasts (radio, errors) do not.
+    if (text && text.includes(':')) {
+      const i = text.indexOf(':');
+      logQuestLine(text.slice(0, i), text.slice(i + 1).trim());
+    }
   }
 
   function barColor(v) {
@@ -103,7 +188,7 @@ export function createHud() {
   }
 
   function update(state) {
-    // Mission banner: chapter chip, stage, objective, target distance,
+    // Quest panel: chapter chip, stage, objective, target distance,
     // day + clock, stage progress bar, next job.
     chapterEl.textContent = state.chapter || '';
     if (stageEl) stageEl.textContent = state.stage || '';
@@ -212,8 +297,18 @@ export function createHud() {
     if (radioEl && state.radio) radioEl.textContent = `♪ ${state.radio}`;
 
     // Bottom-center dialogue: portrait initials + speaker + current line.
+    // v9 iteration 7: smaller, and it gets out of the way — a new line
+    // logs to the quest panel and re-shows the box once; a keypress or
+    // click dismisses it (the log keeps the line); after the conversation
+    // ends the last line lingers 3 game-seconds, then fades.
     if (state.dialogueText) {
-      dialogueEl.style.opacity = '1';
+      const key = `${state.dialogueSpeaker || ''}\n${state.dialogueText}`;
+      if (key !== lastDialogueKey) {
+        lastDialogueKey = key;
+        dialogueDismissed = false;
+        dialogueGoneFor = 0;
+        logQuestLine(state.dialogueSpeaker || '', state.dialogueText);
+      }
       const initials = (state.dialogueSpeaker || 'M Q')
         .split(/\s+/)
         .map((w) => w[0])
@@ -222,8 +317,12 @@ export function createHud() {
       portraitEl.textContent = initials;
       speakerEl.textContent = state.dialogueSpeaker || '';
       dialogueTextEl.textContent = state.dialogueText;
+      dialogueEl.style.opacity = dialogueDismissed ? '0' : '1';
     } else {
-      dialogueEl.style.opacity = '0';
+      // No live line: linger the last one 3 game-seconds, then fade.
+      // (Never shown anything yet: stay hidden.)
+      if (lastDialogueKey) dialogueGoneFor += state.dt || 0;
+      dialogueEl.style.opacity = (lastDialogueKey && dialogueGoneFor <= 3 && !dialogueDismissed) ? '1' : '0';
     }
 
     // Spotlight banner: the heli has its beam on you — break line of
@@ -716,5 +815,5 @@ export function createHud() {
     ctx.fillText('● medal', 540, size - 46);
   }
 
-  return { update, drawMinimap, drawBigMap, showMessage, showAutosave, clockText };
+  return { update, drawMinimap, drawBigMap, showMessage, showAutosave, clockText, toggleQuest, setQuestCollapsed, isQuestCollapsed };
 }

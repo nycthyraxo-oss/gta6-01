@@ -9,7 +9,7 @@ import * as THREE from 'three';
 import { CONFIG } from './config.js';
 
 const SPOTS = [
-  { x: -98, z: 96, note: 'behind the garage' },
+  { x: -98, z: 124, note: 'behind the garage' },
   { x: -98, z: -92, note: 'on a park bench' },
   { x: 160, z: 40, note: 'under a beach umbrella' },
   { x: 128, z: 118, note: 'between the dock crates' },

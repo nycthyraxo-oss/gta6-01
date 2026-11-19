@@ -53,8 +53,11 @@ export function currentMission(missions) {
 export function currentTarget(missions) {
   if (missions.index >= missions.targets.length) return null;
   // Mission 2 has two stages: steal the coupe, then deliver it.
+  // v9 iteration 7: the garage target is the landmark (it moved to
+  // (-112,112)) — never a hardcoded point, or the next garage move
+  // strands the delivery again.
   if (missions.index === 1 && missions.stage === 1) {
-    return { x: -112, z: 84, radius: 9 };
+    return missions.targets[3];
   }
   // Mission 6 has two stages: rob the bank, then reach the safehouse.
   if (missions.index === 5 && missions.stage === 1) {

@@ -282,6 +282,45 @@ export function createAudio(camera, scene) {
       }
       return true;
     },
+    // v9 iteration 7 (§2, defect C + audio-lifecycle gate): silence
+    // every continuous loop at once — both siren paths and the engine.
+    // The per-frame siren/engine update only runs on SCREEN_PLAY, so a
+    // loop left running when the screen leaves PLAY would play forever
+    // over the death / pause / job / shop / map / title screen. Every
+    // handler that leaves gameplay calls this; callers that END the
+    // chase (death, quit) also clear wanted.sirenOn themselves, while
+    // pause / job / shop / map leave the flag alone so the siren
+    // restarts when play resumes.
+    stopLoops() {
+      this.setSiren(false, 0);
+      this.setSirenPositional(false, 0, 0, 0);
+      this.setEngine(0, false, false);
+    },
+    // v9 iteration 7 (§2): is either siren loop sounding right now?
+    // The probe/play-test assert this is false after every exit path.
+    // Positional isPlaying flips the moment pause() runs; the global
+    // gain ramps down on a 0.2 s time constant, so a small threshold
+    // (not exact zero) is the honest read right after the stop.
+    isSirenOn() {
+      const posOn = !!(sirenPos && sirenPos.isPlaying);
+      const globOn = !!(sirenGain && sirenGain.gain.value > 0.005);
+      return posOn || globOn;
+    },
+    // v9 iteration 7 (§3, state contract): the state of EVERY looping
+    // sound, per loop, so the play-test can assert no loop survives
+    // death. The oscillators themselves are started once and never
+    // stopped — the gain / pause is the on/off, so "on" means actually
+    // sounding (positional: isPlaying; global siren + engine: gain
+    // above the ramp-down threshold). The radio is NOT a loop — its
+    // notes are one-shots scheduled per frame, so it decays on its own
+    // the moment step() stops and needs no entry here.
+    loops() {
+      return {
+        positionalSiren: !!(sirenPos && sirenPos.isPlaying),
+        globalSiren: !!(sirenGain && sirenGain.gain.value > 0.005),
+        engine: !!(engineGain && engineGain.gain.value > 0.005),
+      };
+    },
     // One-shot positional burst at a real position: NPC gunfire ('shot')
     // or an explosion ('blast'). Round-robins a pool of three sources.
     positionalShot(x, y, z, kind) {

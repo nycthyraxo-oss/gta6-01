@@ -24,7 +24,7 @@ import { createWanted, addHeat, setStars, ensurePolice, updatePolice, clearPolic
 import { createMissions, startMission, updateMission, completeMission, failMission, currentMission, currentTarget, missionObjectiveText, stageLabel, missionProgress, nextMissionTitle, advanceDialogue, DIALOGUE_LINE_SECONDS } from './missions.js';
 import { createAudio } from './audio.js';
 import { createHud } from './hud.js';
-import { createInput, ACTION_ENTER, ACTION_SHOOT, ACTION_PAUSE, ACTION_MUTE, ACTION_RESTART, ACTION_CONFIRM, ACTION_MAP, ACTION_RADIO, ACTION_NIGHT, ACTION_SPAWN_CAR, ACTION_WEAPON_1, ACTION_WEAPON_2, ACTION_WEAPON_3, ACTION_WEAPON_4, ACTION_WEAPON_5, ACTION_WEAPON_6 } from './input.js';
+import { createInput, ACTION_ENTER, ACTION_SHOOT, ACTION_PAUSE, ACTION_MUTE, ACTION_RESTART, ACTION_CONFIRM, ACTION_MAP, ACTION_RADIO, ACTION_QUEST, ACTION_NIGHT, ACTION_SPAWN_CAR, ACTION_WEAPON_1, ACTION_WEAPON_2, ACTION_WEAPON_3, ACTION_WEAPON_4, ACTION_WEAPON_5, ACTION_WEAPON_6 } from './input.js';
 import { createPackages } from './packages.js';
 import { createMedals } from './medals.js';
 import { updateLights, lightFor } from './trafficlights.js';
@@ -965,10 +965,11 @@ export function createGame(canvas, seed) {
       return;
     }
     // The city map (M) freezes the game while it is open, like a pause
-    // screen with a map on it. M or Esc closes it; pause does nothing here.
+    // screen with a map on it. M, Esc or Enter closes it; pause does
+    // nothing here.
     if (state.screen === SCREEN_MAP) {
-      if (pendingActions & (ACTION_MAP | ACTION_PAUSE)) {
-        pendingActions &= ~(ACTION_MAP | ACTION_PAUSE);
+      if (pendingActions & (ACTION_MAP | ACTION_PAUSE | ACTION_CONFIRM)) {
+        pendingActions &= ~(ACTION_MAP | ACTION_PAUSE | ACTION_CONFIRM);
         document.getElementById('screen-map').style.display = 'none';
         document.getElementById('hud').style.display = 'block';
         state.screen = SCREEN_PLAY;
@@ -976,19 +977,54 @@ export function createGame(canvas, seed) {
       pendingActions = 0;
       return;
     }
-    // The JOB COMPLETE screen is dismissed by its button only.
+    // The JOB COMPLETE screen is dismissed by its button or by Enter /
+    // Space (v9 iteration 7, §2 + overlay gate) — the default action is
+    // Continue, focused when the screen shows.
     if (state.screen === SCREEN_JOB) {
+      if (pendingActions & ACTION_CONFIRM) {
+        pendingActions &= ~ACTION_CONFIRM;
+        continueAfterJob();
+      }
       pendingActions = 0;
       return;
     }
-    // The shop screen (v9 iteration 4): number keys buy, E or Esc
-    // closes. Digits are drained every frame so a stale key never fires
-    // a purchase after the shop closes.
+    // The death screen (v9 iteration 7, §2 defect D + overlay gate):
+    // Enter / Space respawns — the same path as the respawn button
+    // click (hide the overlay + respawn()). Without this branch
+    // ACTION_CONFIRM is taken and dropped on the over screen, so a
+    // keyboard-only player can never leave it. Guarded on player.dead
+    // so a stray Confirm cannot respawn a living player.
+    if (state.screen === SCREEN_OVER) {
+      if (pendingActions & ACTION_CONFIRM) {
+        pendingActions &= ~ACTION_CONFIRM;
+        if (player.dead) {
+          document.getElementById('screen-over').style.display = 'none';
+          respawn();
+        }
+      }
+      pendingActions = 0;
+      return;
+    }
+    // The pause screen (v9 iteration 7, §2 + overlay gate): Enter /
+    // Space resumes (the default action, focused when the screen
+    // shows), P / Esc resumes too.
+    if (state.screen === SCREEN_PAUSED) {
+      if (pendingActions & (ACTION_PAUSE | ACTION_CONFIRM)) {
+        pendingActions &= ~(ACTION_PAUSE | ACTION_CONFIRM);
+        document.getElementById('screen-pause').style.display = 'none';
+        state.screen = SCREEN_PLAY;
+      }
+      pendingActions = 0;
+      return;
+    }
+    // The shop screen (v9 iteration 4): number keys buy, E, Esc or
+    // Enter closes. Digits are drained every frame so a stale key never
+    // fires a purchase after the shop closes.
     if (state.screen === SCREEN_SHOP) {
       const digit = input.takeDigit();
       if (digit >= 1 && digit <= 9) buyShop(digit);
-      if (pendingActions & (ACTION_ENTER | ACTION_PAUSE)) {
-        pendingActions &= ~(ACTION_ENTER | ACTION_PAUSE);
+      if (pendingActions & (ACTION_ENTER | ACTION_PAUSE | ACTION_CONFIRM)) {
+        pendingActions &= ~(ACTION_ENTER | ACTION_PAUSE | ACTION_CONFIRM);
         closeShop();
       }
       pendingActions = 0;
@@ -998,6 +1034,11 @@ export function createGame(canvas, seed) {
       pendingActions &= ~ACTION_MAP;
       if (state.screen === SCREEN_PLAY) {
         state.screen = SCREEN_MAP;
+        // v9 iteration 7 (§2 + overlay gate): the map is a non-play
+        // screen — silence the loops (the chase flag stays, so the
+        // siren restarts when the map closes) and free the cursor.
+        audio.stopLoops();
+        input.releaseLock();
         const def = currentMission(missions);
         document.getElementById('map-job').textContent = def
           ? `${def.title.toUpperCase()} — ${missionObjectiveText(missions)}`
@@ -1014,6 +1055,15 @@ export function createGame(canvas, seed) {
       if (state.screen === SCREEN_PLAY) {
         const name = audio.nextStation();
         hud.showMessage(`♪ ${name}`, 2);
+      }
+    }
+    // Q: collapse / expand the quest panel (v9 iteration 7). The panel
+    // is the only place the objective lives now, so the key works in
+    // play only — the pause and shop screens have their own UI.
+    if (pendingActions & ACTION_QUEST) {
+      pendingActions &= ~ACTION_QUEST;
+      if (state.screen === SCREEN_PLAY) {
+        hud.toggleQuest();
       }
     }
     // L: skip time forward 2 h (v9 iteration 4). The continuous day
@@ -1037,9 +1087,15 @@ export function createGame(canvas, seed) {
         state.screen = SCREEN_PAUSED;
         document.getElementById('screen-pause').style.display = 'flex';
         renderPauseSkills();
-      } else if (state.screen === SCREEN_PAUSED) {
-        state.screen = SCREEN_PLAY;
-        document.getElementById('screen-pause').style.display = 'none';
+        // v9 iteration 7 (§2 + overlay gate): pausing is an exit from
+        // gameplay — silence the loops (the chase flag stays, so the
+        // siren restarts on resume) and free the cursor + focus Resume
+        // so mouse and keyboard both work. Resume itself is handled by
+        // the SCREEN_PAUSED branch above.
+        audio.stopLoops();
+        input.releaseLock();
+        const rb = document.getElementById('btn-resume');
+        if (rb) rb.focus();
       }
     }
     if (pendingActions & ACTION_MUTE) {
@@ -1302,6 +1358,12 @@ export function createGame(canvas, seed) {
     }
     shopKind = kind;
     state.screen = SCREEN_SHOP;
+    // v9 iteration 7 (§2 + overlay gate): the shop is a non-play
+    // screen — silence the loops (the chase flag stays, so the siren
+    // restarts when the shop closes) and free the cursor so the player
+    // can click items.
+    audio.stopLoops();
+    input.releaseLock();
     const shop = cfg.shops[kind] || cfg.shops.spray;
     document.getElementById('shop-title').textContent = shop.name;
     renderShopItems();
@@ -1317,7 +1379,9 @@ export function createGame(canvas, seed) {
       const afford = player.cash >= price;
       const cls = ok && afford ? '' : ' class="off"';
       const why = !ok ? ' — not available' : !afford ? ' — not enough cash' : '';
-      return `<div${cls}>${it.key} · ${it.label} — $${price}${why}</div>`;
+      // data-key makes the row clickable (v9 iteration 7, §2 + overlay
+      // gate): clicking an item buys it, the same as its number key.
+      return `<div data-key="${it.key}"${cls}>${it.key} · ${it.label} — $${price}${why}</div>`;
     }).join('');
     document.getElementById('shop-cash').textContent = `CASH $${Math.round(player.cash)}  ·  REP ${repPoints()}`;
   }
@@ -1927,6 +1991,15 @@ export function createGame(canvas, seed) {
     document.getElementById('job-chapters').innerHTML = chapters;
     document.getElementById('screen-job').style.display = 'flex';
     state.screen = SCREEN_JOB;
+    // v9 iteration 7 (§2 + overlay gate): the job screen is a non-play
+    // screen, so the per-frame siren update stops here too — silence
+    // the loops (the chase flag stays, so the siren restarts on
+    // continue) and free the cursor + focus Continue so mouse and
+    // keyboard both work.
+    audio.stopLoops();
+    input.releaseLock();
+    const jc = document.getElementById('btn-job-continue');
+    if (jc) jc.focus();
     // The closing line plays in the dialogue bar when play resumes.
     if (def.complete) {
       missions.currentLine = { who: def.giver, text: def.complete.replace(/^Marla Quinn: /, '') };
@@ -1952,6 +2025,12 @@ export function createGame(canvas, seed) {
     document.getElementById('over-title').textContent = state.overReason.includes('BUSTED') ? 'BUSTED' : 'WASTED';
     document.getElementById('over-text').textContent = state.overReason;
     document.getElementById('screen-over').style.display = 'flex';
+    // v9 iteration 7 (§2, defect D + overlay gate): free the cursor so
+    // the player can actually click Respawn, and focus it so Enter /
+    // Space (ACTION_CONFIRM) has a visible default to hit.
+    input.releaseLock();
+    const btn = document.getElementById('btn-respawn');
+    if (btn) btn.focus();
   }
 
   // Armour soaks 60% of every hit while it lasts; the rest goes to health.
@@ -1971,6 +2050,14 @@ export function createGame(canvas, seed) {
       player.dead = true;
       state.overReason = cause === 'arrest' ? 'BUSTED — the Costa PD took you in.' : 'WASTED — Rico went down in Costa Fuego.';
       state.screen = SCREEN_OVER;
+      // v9 iteration 7 (§2, defect C): the siren loops are driven by
+      // the per-frame update, which only runs on SCREEN_PLAY — once the
+      // screen flips to OVER nothing ever silences them, so a chase
+      // siren would play forever over the death screen. Stop both siren
+      // paths (and the engine loop, same freeze) here, and clear the
+      // flag so a later update cannot restart them.
+      wanted.sirenOn = false;
+      audio.stopLoops();
       audio.fail();
       showOver();
       saveGame();
@@ -1978,6 +2065,13 @@ export function createGame(canvas, seed) {
   }
 
   function respawn() {
+    // v9 iteration 7 (§2, defect C, belt-and-braces): silence any loop
+    // the death screen left running before the mission restarts (a
+    // restarted mission that sets stars re-enables the siren itself
+    // through the normal per-frame update). Hides the over screen too,
+    // so any caller — button, Enter, debug hook — lands clean.
+    audio.stopLoops();
+    document.getElementById('screen-over').style.display = 'none';
     player.health = cfg.player.maxHealth;
     // Bazooka restock on respawn (v9 iteration 3): waking up at the
     // hospital refills the rockets to the full 8.
@@ -2614,6 +2708,16 @@ export function createGame(canvas, seed) {
       if (player.owned.rifle) { player.weapon = 5; audio.click(); updateWeaponModels(); }
       else hud.showMessage('Rifle locked — buy it at Ammu-Nation (REP 60).', 2);
     }
+    // v9 iteration 7 (§2, defect C): the action handling above can leave
+    // PLAY mid-step — E opens a shop, which stops the loops and sets the
+    // screen to SHOP — but step() kept running to the siren update below,
+    // which saw wanted.sirenOn still true (the chase flag stays, so the
+    // siren restarts when the shop closes) and restarted the siren in the
+    // SAME step, undoing the stop. The entry check at the top of step()
+    // only guards the next frame. Re-check here: once the screen has
+    // left PLAY, the rest of the simulation (movement, police, missions,
+    // siren) must not run this frame either.
+    if (state.screen !== SCREEN_PLAY) return;
 
     const p = playerPos();
     if (player.inCar && player.car) {
@@ -3544,19 +3648,21 @@ export function createGame(canvas, seed) {
       document.getElementById('screen-map').style.display = 'flex';
       hud.drawBigMap(mapWorld());
     } else if (name === 'dialogue') {
-      // Homecoming briefing at the spawn: Marla's opening line in the
-      // dialogue bar with her portrait, the garage beacon ahead, and the
-      // spawn clear of buildings (the spawn-wall fix). Staged tighter and
-      // lower than before, so the frame holds the garage front (with its
-      // MARLA'S GARAGE board), the street, a parked car, pedestrians and the
-      // new spawn props — not a flat wall and not an empty lot.
-      playerMesh.position.set(-104, 0, 52);
-      player.heading = Math.atan2(-112 - -104, 84 - 52);
+      // Homecoming briefing on the garage forecourt: Marla's opening line
+      // in the dialogue bar with her portrait, the garage beacon ahead, and
+      // the dressed shopfront filling the frame. Staged tighter and lower
+      // than before, so the frame holds the garage front (with its
+      // MARLA'S GARAGE board), the forecourt clutter, the street and the
+      // pedestrians — not a flat wall and not an empty lot. (v9 iteration
+      // 7: the player no longer stands at the spawn — the garage moved
+      // 28 m south, and the old staging left it a thumbnail.)
+      playerMesh.position.set(-104, 0, 90);
+      player.heading = Math.atan2(-112 - -104, 112 - 90);
       state.camYaw = player.heading;
       state.clockHour = 18.4;
       for (let i = 0; i < 3; i += 1) {
         const ped = pedestrians[i];
-        ped.group.position.set(-100 + i * 6, 0, 56 + i * 4);
+        ped.group.position.set(-100 + i * 6, 0, 94 + i * 4);
       }
       hud.showMessage('Marla Quinn: Get to my garage, Coral Row — we talk work.', 30);
     }
@@ -3685,6 +3791,174 @@ export function createGame(canvas, seed) {
       // buildings / palms / trees / hydrants / bins / stalls, sign-pole
       // occlusion and ramp ground contact, all from the real layout.
       placementAudit: () => city.placementAudit(),
+      // v9 iteration 7 (§3, Gemini detection method): audit the LIVE
+      // scene graph against the road rects — not the source arrays. A
+      // mesh that exists in the scene but in no array is exactly what
+      // the array audit missed (the garage sat in the z=84 road for six
+      // iterations because landmarks were never audited). Traverses
+      // city.group (the city's scene graph — dynamic objects live
+      // outside it and are excluded because they move), computes each
+      // mesh's world footprint (per-instance for InstancedMesh, via
+      // getMatrixAt + the geometry bounding box), categorises it, and
+      // checks it against the roads. Returns counts + any overlap /
+      // uncategorised placeable; the probe fails the run on either.
+      sceneAudit: () => {
+        city.group.updateMatrixWorld(true);
+        const roadHalf = cfg.world.roadWidth / 2; // 10
+        const half = city.half;
+        const roads = [];
+        for (const c of city.roadLines) {
+          roads.push({ axis: 'x', line: c, x0: c - roadHalf, x1: c + roadHalf, z0: -half, z1: half });
+          roads.push({ axis: 'z', line: c, z0: c - roadHalf, z1: c + roadHalf, x0: -half, x1: half });
+        }
+        // Container footprints for the containment fallback: the 97
+        // building records + the 4 landmark buildings (same sizes as
+        // placementAudit), each expanded by 2 m so a sign / awning /
+        // roof detail that sticks out slightly still counts as part of
+        // its building.
+        const containers = [];
+        for (const b of city.buildingRecords) {
+          containers.push({ x0: b.x - b.w / 2 - 2, x1: b.x + b.w / 2 + 2, z0: b.z - b.d / 2 - 2, z1: b.z + b.d / 2 + 2 });
+        }
+        const landmarkSizes = { garage: [24, 14], bank: [22, 16], hospital: [24, 16], tower: [22, 22] };
+        for (const [key, dims] of Object.entries(landmarkSizes)) {
+          const lm = city.landmarks[key];
+          containers.push({ x0: lm.x - dims[0] / 2 - 2, x1: lm.x + dims[0] / 2 + 2, z0: lm.z - dims[1] / 2 - 2, z1: lm.z + dims[1] / 2 + 2 });
+        }
+        const roadHit = (x0, x1, z0, z1) => {
+          let worst = null;
+          for (const r of roads) {
+            const ox = Math.min(x1, r.x1) - Math.max(x0, r.x0);
+            const oz = Math.min(z1, r.z1) - Math.max(z0, r.z0);
+            const depth = Math.min(ox, oz);
+            if (depth > 0.05 && (!worst || depth > worst.depth)) {
+              worst = { road: r.axis === 'x' ? `x=${r.line}` : `z=${r.line}`, depth: Math.round(depth * 10) / 10 };
+            }
+          }
+          return worst;
+        };
+        // Distance from a footprint to the nearest edge of any road rect
+        // it overlaps (Infinity if it overlaps none). Junction-corner
+        // furniture sits ~2 m inside the edge by design; a pole deep in
+        // the road is far from every edge.
+        const roadEdgeDist = (x0, x1, z0, z1) => {
+          let best = Infinity;
+          for (const r of roads) {
+            const ox = Math.min(x1, r.x1) - Math.max(x0, r.x0);
+            const oz = Math.min(z1, r.z1) - Math.max(z0, r.z0);
+            if (ox > 0 && oz > 0) {
+              best = Math.min(best, r.x1 - x1, x0 - r.x0, r.z1 - z1, z0 - r.z0);
+            }
+          }
+          return best;
+        };
+        const out = {
+          meshes: 0, instances: 0, placeables: 0, flat: 0, elevated: 0, huge: 0,
+          overlaps: [], uncategorised: [], cornerPoles: 0, cornerPolesOffRoad: 0, byCategory: {},
+        };
+        const catOf = (obj) => {
+          let o = obj;
+          while (o) {
+            if (o.userData && o.userData.cat) return o.userData.cat;
+            o = o.parent;
+          }
+          return null;
+        };
+        const r1 = (v) => Math.round(v * 10) / 10;
+        const checkFootprint = (cat, x0, x1, z0, z1, y0, y1) => {
+          const h = y1 - y0;
+          const w = x1 - x0;
+          const d = z1 - z0;
+          // Flat (ground, roads, puddles, paint, light pools) and huge
+          // (the ground plane, the sea) are not placeables.
+          if (h < 0.3) { out.flat += 1; return; }
+          if (w >= 200 || d >= 200) { out.huge += 1; return; }
+          // Elevated (base >= 2 m up): attached to a building face /
+          // roof, or flying (the ambient heli). It cannot block the road
+          // surface — the grounded structure it hangs from is the thing
+          // that gets checked.
+          if (y0 >= 2) { out.elevated += 1; return; }
+          out.placeables += 1;
+          let c = cat;
+          if (!c) {
+            // Containment: footprint centre inside a building /
+            // landmark record (expanded 2 m) = part of that building.
+            const cx = (x0 + x1) / 2;
+            const cz = (z0 + z1) / 2;
+            if (containers.some((k) => cx >= k.x0 && cx <= k.x1 && cz >= k.z0 && cz <= k.z1)) c = 'part-of-building';
+          }
+          if (!c) {
+            // Outside the road grid entirely (east of x=150, west of
+            // -150, north of z=150, south of -150): the beach, causeway,
+            // island. It cannot overlap a road by construction.
+            if (x0 > 150 || x1 < -150 || z0 > 150 || z1 < -150) c = 'outside-grid';
+          }
+          if (!c) {
+            out.uncategorised.push({ x: r1((x0 + x1) / 2), z: r1((z0 + z1) / 2), w: r1(w), d: r1(d), y0: r1(y0) });
+            return;
+          }
+          out.byCategory[c] = (out.byCategory[c] || 0) + 1;
+          // The docks are waterfront structures at the beachfront
+          // avenue's edge by design (same as the array audit's
+          // docks/marina point exclusion) — exempt from the road check.
+          if (c === 'dock') return;
+          // Stunt ramps sit on the road shoulders by design (config.js:
+          // "the three stunt ramps sit on road shoulders, clear of
+          // junctions and mission lines — hit one over 15 m/s and the
+          // car flies"). They MUST adjoin the road to be hittable at
+          // speed from it, so a 4 m overlap with the road rect is the
+          // intended placement, not a misplacement. Their positions are
+          // still asserted by the probe's ramp checks (6 ramps, each
+          // drivable). Same precedent as the 'dock' exemption above.
+          if (c === 'ramp') return;
+          // Junction-corner furniture (traffic-light + street-sign
+          // poles): they stand at the corner of an intersection, ~2 m
+          // inside the road rect's edge, by design. They pass if they
+          // sit within 2.5 m of the road edge — a pole deep in the road
+          // (a real misplacement) fails. A pole that overlaps NO road
+          // rect at all (edge === Infinity) is off-road, not deep in
+          // one — it passes this check. (v9 iteration 7: three of the
+          // six signalled junctions — (0,0), (-56,0), (0,56) — are not
+          // road crossings, so their 12 poles overlap no road and were
+          // wrongly flagged. Whether those junctions belong there is a
+          // design decision, not a road violation; see the probe notes.)
+          if (c === 'traffic-light' || c === 'sign') {
+            const edge = roadEdgeDist(x0, x1, z0, z1);
+            out.cornerPoles += 1;
+            if (edge === Infinity) out.cornerPolesOffRoad += 1;
+            if (edge !== Infinity && edge > 2.5) {
+              out.overlaps.push({ cat: c, x: r1((x0 + x1) / 2), z: r1((z0 + z1) / 2), w: r1(w), d: r1(d), road: 'corner-pole too deep', depth: r1(edge) });
+            }
+            return;
+          }
+          const hit = roadHit(x0, x1, z0, z1);
+          if (hit) out.overlaps.push({ cat: c, x: r1((x0 + x1) / 2), z: r1((z0 + z1) / 2), w: r1(w), d: r1(d), ...hit });
+        };
+        const m4 = new THREE.Matrix4();
+        const box3 = new THREE.Box3();
+        city.group.traverse((obj) => {
+          if (!obj.isMesh) return;
+          out.meshes += 1;
+          const cat = catOf(obj);
+          if (obj.isInstancedMesh) {
+            const geo = obj.geometry;
+            if (!geo.boundingBox) geo.computeBoundingBox();
+            for (let i = 0; i < obj.count; i += 1) {
+              obj.getMatrixAt(i, m4);
+              box3.copy(geo.boundingBox).applyMatrix4(m4).applyMatrix4(obj.matrixWorld);
+              out.instances += 1;
+              checkFootprint(cat, box3.min.x, box3.max.x, box3.min.z, box3.max.z, box3.min.y, box3.max.y);
+            }
+          } else {
+            const geo = obj.geometry;
+            if (!geo) return;
+            if (!geo.boundingBox) geo.computeBoundingBox();
+            box3.copy(geo.boundingBox).applyMatrix4(obj.matrixWorld);
+            checkFootprint(cat, box3.min.x, box3.max.x, box3.min.z, box3.max.z, box3.min.y, box3.max.y);
+          }
+        });
+        return out;
+      },
       camYaw: () => state.camYaw,
       setCamYaw: (v) => { state.camYaw = v; },
       playerState: () => ({
@@ -3846,6 +4120,13 @@ export function createGame(canvas, seed) {
         return inVisionCone(pp.x, pp.z);
       },
       radio: () => ({ station: audio.stationName(), off: audio.isRadioOff(), ducking: audio.isDucking(), positional: audio.positionalCount() }),
+      // v9 iteration 7 (§2, defect C): is either siren loop sounding?
+      // The probe/play-test assert this is false after every exit path.
+      sirenOn: () => audio.isSirenOn(),
+      // v9 iteration 7 (§3, state contract): the state of EVERY looping
+      // sound, per loop — the play-test asserts all three are false
+      // after death (positional siren, global siren, engine).
+      audioLoops: () => audio.loops(),
       shop: () => ({ kind: shopKind, screen: state.screen, near: nearShop() }),
       destructibles: () => city.destructibles.map((d) => ({
         kind: d.kind, x: d.home.x, z: d.home.z, broken: d.broken, timer: Math.round(d.timer * 10) / 10,
@@ -3932,6 +4213,13 @@ export function createGame(canvas, seed) {
       streetAt: (x, z) => streetAt(x, z, cfg),
       witness: () => (witness ? { timer: Math.round(witness.timer * 10) / 10, ped: { x: witness.ped.group.position.x, z: witness.ped.group.position.z } } : null),
       heat: () => ({ heat: Math.round(wanted.heat), stars: wanted.stars }),
+      // v9 iteration 7 (§2, defect D): kill the player through the real
+      // death path (damagePlayer) so the play-test can verify the over
+      // screen, the siren stop and the respawn flow end to end.
+      kill: (cause) => {
+        damagePlayer(99999, cause || 'test');
+        return { dead: player.dead, screen: state.screen };
+      },
       gate: () => (city.islandGate ? { open: Math.round(city.islandGate.open * 100) / 100, beamY: Math.round(city.islandGate.beam.position.y * 100) / 100 } : null),
       carSilhouettes: () => {
         const out = {};
@@ -4048,6 +4336,11 @@ export function createGame(canvas, seed) {
         if (cb) cb.disabled = !sv;
         const pt = document.getElementById('save-status-text');
         if (pt) pt.textContent = sv ? saveSummary(sv) : 'CH.1 HOMECOMING · $0 · REP 0 · DAY 1';
+        // v9 iteration 7 (§2 + overlay gate): focus the title's default
+        // button (Continue when a save exists, else New Game) so Enter
+        // has a visible default to hit.
+        const defBtn = (sv && cb && !cb.disabled) ? cb : document.getElementById('btn-new-game');
+        if (defBtn) defBtn.focus();
       };
       document.getElementById('btn-new-game').addEventListener('click', () => {
         document.getElementById('screen-title').style.display = 'none';
@@ -4077,12 +4370,24 @@ export function createGame(canvas, seed) {
       });
       document.getElementById('btn-restart-mission').addEventListener('click', () => {
         document.getElementById('screen-pause').style.display = 'none';
+        // v9 iteration 7 (§2): restarting a mission is an exit from the
+        // paused run — silence any loop the pause left running (a
+        // restarted mission that sets stars re-enables the siren itself
+        // through the normal per-frame update).
+        audio.stopLoops();
         failMission(missions);
         tryStartMission(missions.index);
         state.screen = SCREEN_PLAY;
       });
       document.getElementById('btn-quit').addEventListener('click', () => {
         document.getElementById('screen-pause').style.display = 'none';
+        // v9 iteration 7 (§2, defect C, belt-and-braces): quitting to
+        // the title ends the chase — silence the loops and clear the
+        // flag so no siren survives onto the title screen. Free the
+        // cursor too (the title is a non-play screen).
+        wanted.sirenOn = false;
+        audio.stopLoops();
+        input.releaseLock();
         document.getElementById('screen-title').style.display = 'flex';
         state.screen = SCREEN_TITLE;
         refreshTitleSave();
@@ -4090,6 +4395,14 @@ export function createGame(canvas, seed) {
       document.getElementById('btn-respawn').addEventListener('click', () => {
         document.getElementById('screen-over').style.display = 'none';
         respawn();
+      });
+      // v9 iteration 7 (§2 + overlay gate): shop rows are clickable —
+      // clicking a row buys it, the same as pressing its number key.
+      // Delegated on the container so re-rendered rows stay live.
+      document.getElementById('shop-items').addEventListener('click', (e) => {
+        const t = e.target.closest('[data-key]');
+        if (!t) return;
+        buyShop(parseInt(t.dataset.key, 10));
       });
       document.getElementById('btn-job-continue').addEventListener('click', () => {
         continueAfterJob();
@@ -4151,6 +4464,13 @@ export function createGame(canvas, seed) {
       document.getElementById('over-title').textContent = reason.includes('BUSTED') ? 'BUSTED' : 'WASTED';
       document.getElementById('over-text').textContent = reason;
       document.getElementById('screen-over').style.display = 'flex';
+      // v9 iteration 7 (§2): the same treatment as showOver — this is
+      // the debug/external path onto the same screen.
+      wanted.sirenOn = false;
+      audio.stopLoops();
+      input.releaseLock();
+      const btn = document.getElementById('btn-respawn');
+      if (btn) btn.focus();
     },
   };
 }

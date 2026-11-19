@@ -12,58 +12,78 @@
   #hud { position: fixed; inset: 0; pointer-events: none; display: none; z-index: 5; }
   .hud-box { position: absolute; color: #fff; text-shadow: 0 2px 4px rgba(0,0,0,.9), 0 0 2px #000;
     font-weight: 700; }
-  /* Mission banner, top-center: chapter chip + objective + distance + clock. */
-  #hud-banner { top: 14px; left: 50%; transform: translateX(-50%); display: flex; gap: 8px;
-    align-items: center; background: rgba(0,0,0,.55); padding: 10px 14px; border-radius: 6px;
-    font-size: 18px; width: max-content; max-width: 96vw; flex-wrap: nowrap; justify-content: center; }
-  @media (max-width: 900px) {
-    #hud-banner { font-size: 15px; padding: 8px 12px; gap: 8px; }
-    #hud-chapter, #hud-stage { font-size: 12px; }
-    #hud-clock { font-size: 14px; }
-  }
-  #hud-chapter { background: #e83e6b; padding: 3px 9px; border-radius: 4px; font-size: 15px;
+  /* Quest panel, top-left (v9 iteration 7): the old top-centre mission
+     banner is gone — the objective lives here now, one line (chapter +
+     short objective), minimizable to a tiny QUEST chip. The full
+     objective text, NEXT chapter, dialogue log and weapon list sit
+     inside the scrollable body — small text, tucked away, not deleted. */
+  #hud-quest { position: absolute; top: 14px; left: 18px; width: 300px; max-width: 46vw;
+    background: rgba(0,0,0,.55); border-radius: 6px; padding: 8px 10px;
+    font-size: 13px; color: #fff; font-weight: 700; pointer-events: auto;
+    text-shadow: 0 2px 4px rgba(0,0,0,.9), 0 0 2px #000; }
+  #hud-quest-head { display: flex; align-items: center; gap: 6px; }
+  #hud-quest-title { font-size: 11px; letter-spacing: 2px; color: #ffd23e; }
+  #hud-quest-toggle { margin-left: auto; flex: none; cursor: pointer; background: rgba(255,255,255,.12);
+    color: #fff; border: 1px solid rgba(255,255,255,.35); border-radius: 4px;
+    font-size: 12px; font-weight: 700; line-height: 1; padding: 3px 8px; }
+  #hud-quest-toggle:hover { background: rgba(255,255,255,.25); }
+  #hud-quest-body { margin-top: 6px; max-height: 170px; overflow-y: auto; }
+  #hud-quest.collapsed #hud-quest-body { display: none; }
+  #hud-quest-line1 { display: flex; align-items: center; gap: 6px; }
+  #hud-chapter { background: #e83e6b; padding: 2px 7px; border-radius: 4px; font-size: 11px;
     letter-spacing: 1px; flex: none; }
-  #hud-stage { background: #2a7a8c; padding: 3px 9px; border-radius: 4px; font-size: 15px;
+  #hud-stage { background: #2a7a8c; padding: 2px 7px; border-radius: 4px; font-size: 11px;
     letter-spacing: 1px; flex: none; }
-  #hud-objective { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  #hud-target-dist { color: #7dff8a; flex: none; }
-  #hud-clock { opacity: .85; font-size: 18px; flex: none; }
-  /* Stage progress bar under the banner, and the next job after this one. */
-  #hud-stagebar { position: absolute; top: 70px; left: 50%; transform: translateX(-50%);
-    width: 340px; max-width: 60vw; height: 6px; background: rgba(0,0,0,.55); border-radius: 3px;
+  #hud-objective { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; }
+  #hud-target-dist { color: #7dff8a; flex: none; font-size: 13px; }
+  #hud-clock { opacity: .85; font-size: 12px; margin-top: 4px; }
+  /* Stage progress bar inside the quest panel, and the next job after this one. */
+  #hud-stagebar { margin-top: 6px; width: 100%; height: 5px; background: rgba(0,0,0,.55); border-radius: 3px;
     overflow: hidden; }
   #hud-stagebar-fill { height: 100%; width: 0%; background: #ffd23e; }
-  #hud-next { position: absolute; top: 80px; left: 50%; transform: translateX(-50%);
-    font-size: 14px; letter-spacing: 1px; color: #ffd23e; display: none;
-    background: rgba(0,0,0,.55); padding: 3px 10px; border-radius: 4px; }
-  /* Spotlight banner: the heli has its beam on you. It lives in the empty
-     left column (under the chapter banner, above the minimap) so it never
-     covers a centred landmark sign in the 3D scene. */
-  #hud-spotlight { position: absolute; top: 60px; left: 18px;
-    background: rgba(255, 42, 34, .75); color: #fff; font-size: 18px; letter-spacing: 2px;
-    padding: 6px 16px; border-radius: 6px; display: none; animation: spotblink 0.8s steps(2) infinite; }
+  #hud-next { margin-top: 4px; font-size: 12px; letter-spacing: 1px; color: #ffd23e; display: none; }
+  #hud-quest-log { margin-top: 6px; border-top: 1px solid rgba(255,255,255,.2); padding-top: 4px;
+    font-size: 11px; line-height: 1.45; color: #eaf4ff; font-weight: 400; }
+  #hud-quest-log div { margin-top: 2px; }
+  #hud-quest-log b { color: #ffd23e; }
+  #hud-quest-weapons { margin-top: 6px; border-top: 1px solid rgba(255,255,255,.2); padding-top: 4px;
+    font-size: 12px; line-height: 1.5; color: #9aa0aa; font-weight: 400; }
+  @media (max-width: 900px) {
+    #hud-quest { width: 240px; }
+  }
+  /* Spotlight banner: the heli has its beam on you. Small, top-centre
+     under the message toast — never near the wanted stars (top-right)
+     or the quest panel (top-left) at shot width. Top 100px, not 56px:
+     a 2-line toast reaches ~y 64, so 56px let it cover the spotlight. */
+  #hud-spotlight { position: absolute; top: 100px; left: 50%; transform: translateX(-50%);
+    background: rgba(255, 42, 34, .75); color: #fff; font-size: 13px; letter-spacing: 1px;
+    padding: 4px 10px; border-radius: 6px; display: none; animation: spotblink 0.8s steps(2) infinite;
+    white-space: nowrap; }
   @keyframes spotblink { 50% { opacity: .45; } }
-  /* Top-right: heat label, wanted stars, cash, weapon slots, pursuers. */
-  #hud-right { top: 14px; right: 18px; text-align: right; font-size: 24px; line-height: 1.3; }
-  #hud-mode { font-size: 19px; letter-spacing: 1px; }
-  #hud-stars { font-size: 34px; letter-spacing: 4px; }
-  #hud-cash { color: #7dff8a; font-size: 30px; }
-  #hud-weapon { font-size: 20px; color: #eaf4ff; }
-  #hud-weapon2 { font-size: 16px; color: #9aa0aa; }
-  #hud-weapon3 { font-size: 16px; color: #9aa0aa; }
-  #hud-weapon4 { font-size: 16px; color: #9aa0aa; }
-  #hud-weapon5 { font-size: 16px; color: #9aa0aa; }
-  #hud-weapon6 { font-size: 16px; color: #9aa0aa; }
-  /* Autosave indicator: a brief green SAVED under the banner. */
-  #hud-autosave { position: absolute; top: 104px; left: 50%; transform: translateX(-50%);
-    font-size: 13px; letter-spacing: 2px; color: #7dff8a; opacity: 0; transition: opacity .4s;
+  /* Top-right: heat label, wanted stars, cash, current weapon, pursuers.
+     Small now (v9 iteration 7) — the full weapon list lives in the
+     quest panel, and the stars stay compact. */
+  #hud-right { top: 14px; right: 18px; text-align: right; font-size: 18px; line-height: 1.3; }
+  #hud-mode { font-size: 14px; letter-spacing: 1px; }
+  #hud-stars { font-size: 24px; letter-spacing: 3px; }
+  #hud-cash { color: #7dff8a; font-size: 22px; }
+  #hud-weapon { font-size: 16px; color: #eaf4ff; }
+  #hud-weapon2 { font-size: 12px; color: #9aa0aa; }
+  #hud-weapon3 { font-size: 12px; color: #9aa0aa; }
+  #hud-weapon4 { font-size: 12px; color: #9aa0aa; }
+  #hud-weapon5 { font-size: 12px; color: #9aa0aa; }
+  #hud-weapon6 { font-size: 12px; color: #9aa0aa; }
+  /* Autosave indicator: a brief green SAVED, top-centre under the
+     spotlight slot so it never covers the message toast or the stars. */
+  #hud-autosave { position: absolute; top: 140px; left: 50%; transform: translateX(-50%);
+    font-size: 12px; letter-spacing: 2px; color: #7dff8a; opacity: 0; transition: opacity .4s;
     background: rgba(0,0,0,.55); padding: 2px 10px; border-radius: 4px; }
   #hud-pursuers { margin-top: 8px; font-size: 15px; line-height: 1.5; color: #ffb13e;
     background: rgba(0,0,0,.5); padding: 6px 10px; border-radius: 6px; display: none; }
   #hud-pursuers .hot { color: #ff5a4a; }
   /* Bottom-left: district label, minimap, health / armour / rep bars, packages. */
   #hud-mapwrap { position: absolute; bottom: 18px; left: 18px; }
-  #hud-district { font-size: 20px; letter-spacing: 1px; color: #ffd23e; margin-bottom: 6px;
+  #hud-district { font-size: 15px; letter-spacing: 1px; color: #ffd23e; margin-bottom: 6px;
     text-shadow: 0 2px 4px rgba(0,0,0,.9), 0 0 2px #000; font-weight: 700; }
   #minimap { width: 200px; height: 200px; border: 3px solid rgba(255,255,255,.85);
     border-radius: 50%; background: rgba(10,18,26,.85); display: block; }
@@ -77,25 +97,30 @@
   #hud-repfill { background: #c98ae0; }
   #hud-packages { margin-top: 6px; font-size: 15px; color: #ffd23e; letter-spacing: 1px;
     text-shadow: 0 2px 4px rgba(0,0,0,.9); font-weight: 700; }
-  /* Bottom-center dialogue bar: portrait + speaker + line. */
-  #hud-dialogue { bottom: 18px; left: 50%; transform: translateX(-50%); display: flex; gap: 12px;
-    align-items: center; background: rgba(0,0,0,.6); padding: 10px 16px; border-radius: 8px;
-    max-width: 620px; transition: opacity .4s; }
-  #hud-portrait { width: 48px; height: 48px; flex: none; border-radius: 50%; background: #2a7a8c;
+  /* Bottom-center dialogue bar: portrait + speaker + line. Smaller now
+     (v9 iteration 7) and clickable — click or any keypress dismisses it,
+     and the line stays in the quest panel log. */
+  #hud-dialogue { bottom: 18px; left: 50%; transform: translateX(-50%); display: flex; gap: 10px;
+    align-items: center; background: rgba(0,0,0,.6); padding: 8px 12px; border-radius: 8px;
+    max-width: 480px; transition: opacity .4s; pointer-events: auto; cursor: pointer; }
+  #hud-portrait { width: 36px; height: 36px; flex: none; border-radius: 50%; background: #2a7a8c;
     border: 2px solid #ffd23e; display: flex; align-items: center; justify-content: center;
-    font-size: 20px; }
-  #hud-speaker { color: #ffd23e; font-size: 15px; letter-spacing: 1px; }
-  #hud-dialogue-text { font-size: 18px; font-weight: 600; line-height: 1.35; }
+    font-size: 16px; }
+  #hud-speaker { color: #ffd23e; font-size: 13px; letter-spacing: 1px; }
+  #hud-dialogue-text { font-size: 15px; font-weight: 600; line-height: 1.35; }
   /* Bottom-right speedo: big speed, car + gear, condition, radio. */
   #hud-speedo { bottom: 18px; right: 18px; text-align: right; }
-  #hud-speed { font-size: 46px; }
+  #hud-speed { font-size: 38px; }
   #hud-speedunit { font-size: 20px; opacity: .85; }
   #hud-car { font-size: 18px; color: #ffd23e; }
   #hud-condition { font-size: 15px; font-weight: 600; }
   #hud-radio { font-size: 15px; opacity: .85; font-weight: 600; }
-  #hud-message { top: 170px; left: 50%; transform: translateX(-50%); width: 640px; max-width: 86vw;
-    text-align: center; font-size: 24px; line-height: 1.4; background: rgba(0,0,0,.6);
-    padding: 10px 16px; border-radius: 6px; transition: opacity .4s; opacity: 0; }
+  /* Transient message toast (v9 iteration 7): the old big centre banner
+     is gone — mission messages are a small toast at the top centre that
+     fades after a few seconds, never a persistent block of text. */
+  #hud-message { top: 14px; left: 50%; transform: translateX(-50%); width: max-content; max-width: 340px;
+    text-align: center; font-size: 15px; line-height: 1.4; background: rgba(0,0,0,.6);
+    padding: 6px 12px; border-radius: 6px; transition: opacity .4s; opacity: 0; }
   .overlay { position: fixed; inset: 0; display: flex; align-items: center; justify-content: safe center;
     flex-direction: column; z-index: 10; color: #fff; text-align: center; overflow-y: auto;
     background: linear-gradient(180deg, rgba(6,14,22,.25) 0%, rgba(6,14,22,.72) 100%); }
@@ -221,15 +246,31 @@
 <div id="crosshair"></div>
 
 <div id="hud">
-  <div class="hud-box" id="hud-banner">
-    <span id="hud-chapter">CH.1 HOMECOMING</span>
-    <span id="hud-stage">STAGE 1/1</span>
-    <span id="hud-objective">Reach Marla's Garage on Coral Row</span>
-    <span id="hud-target-dist"></span>
-    <span id="hud-clock">DAY 1 · 18:24</span>
+  <div id="hud-quest">
+    <div id="hud-quest-head">
+      <span id="hud-quest-title">QUEST</span>
+      <span id="hud-chapter">CH.1 HOMECOMING</span>
+      <span id="hud-stage">STAGE 1/1</span>
+      <button id="hud-quest-toggle" type="button" aria-label="Minimize quest panel">—</button>
+    </div>
+    <div id="hud-quest-body">
+      <div id="hud-quest-line1">
+        <span id="hud-objective">Reach Marla's Garage on Coral Row</span>
+        <span id="hud-target-dist"></span>
+      </div>
+      <div id="hud-clock">DAY 1 · 18:24</div>
+      <div id="hud-stagebar"><div id="hud-stagebar-fill"></div></div>
+      <div id="hud-next"></div>
+      <div id="hud-quest-log"></div>
+      <div id="hud-quest-weapons">
+        <div id="hud-weapon2">2 · KNIFE ∞</div>
+        <div id="hud-weapon3">3 · BAZOOKA 8</div>
+        <div id="hud-weapon4">4 · SMG — LOCKED (REP 20)</div>
+        <div id="hud-weapon5">5 · SHOTGUN — LOCKED (REP 40)</div>
+        <div id="hud-weapon6">6 · RIFLE — LOCKED (REP 60)</div>
+      </div>
+    </div>
   </div>
-  <div id="hud-stagebar"><div id="hud-stagebar-fill"></div></div>
-  <div id="hud-next"></div>
   <div id="hud-autosave"></div>
   <div id="hud-spotlight">◉ SPOTLIGHT ON YOU — BREAK LINE OF SIGHT</div>
   <div class="hud-box" id="hud-right">
@@ -237,11 +278,6 @@
     <div id="hud-stars">☆☆☆☆☆</div>
     <div id="hud-cash">$150</div>
     <div id="hud-weapon">1 · PISTOL 24</div>
-    <div id="hud-weapon2">2 · KNIFE ∞</div>
-    <div id="hud-weapon3">3 · BAZOOKA 8</div>
-    <div id="hud-weapon4">4 · SMG — LOCKED (REP 20)</div>
-    <div id="hud-weapon5">5 · SHOTGUN — LOCKED (REP 40)</div>
-    <div id="hud-weapon6">6 · RIFLE — LOCKED (REP 60)</div>
     <div id="hud-pursuers"></div>
   </div>
   <div class="hud-box" id="hud-message"></div>
@@ -290,7 +326,7 @@
     Left click shoot (locks the mouse) &nbsp;·&nbsp; Right click aim &nbsp;·&nbsp; Mouse drag camera<br>
     F shoot &nbsp;·&nbsp; Space jump (on foot) / handbrake-drift (in car) &nbsp;·&nbsp; S reverse<br>
     1–6 switch weapon (pistol / knife / bazooka / SMG / shotgun / rifle)<br>
-    M city map &nbsp;·&nbsp; Q radio (5 stations + off) &nbsp;·&nbsp; L skip time +2 h &nbsp;·&nbsp; V spawn a car ($25)<br>
+    M city map &nbsp;·&nbsp; B radio (5 stations + off) &nbsp;·&nbsp; Q quest panel &nbsp;·&nbsp; L skip time +2 h &nbsp;·&nbsp; V spawn a car ($25)<br>
     P pause &nbsp;·&nbsp; N mute &nbsp;·&nbsp; R restart mission &nbsp;·&nbsp; Enter start game
   </div>
 </div>

@@ -21,6 +21,10 @@ export const ACTION_MAP = 64;
 export const ACTION_RADIO = 128;
 export const ACTION_NIGHT = 256;
 export const ACTION_SPAWN_CAR = 512;
+// v9 iteration 7: Q toggles the quest panel (the radio moved to B) —
+// the HUD declutter put the objective in a minimizable left-corner
+// panel, and Q is the key the player reaches for first.
+export const ACTION_QUEST = 65536;
 // v9 iteration 3: number keys switch weapon (1 pistol, 2 knife, 3 bazooka).
 export const ACTION_WEAPON_1 = 1024;
 export const ACTION_WEAPON_2 = 2048;
@@ -37,7 +41,7 @@ const MOVE_KEYS = new Set(['KeyW', 'KeyA', 'KeyS', 'KeyD', 'ArrowUp', 'ArrowDown
 // keyboard navigation of the title buttons, Escape exits Pointer Lock
 // (the browser owns that one).
 const CONTROL_KEYS = new Set([
-  ...MOVE_KEYS, 'Space', 'KeyE', 'KeyF', 'KeyQ', 'KeyM', 'KeyL', 'KeyV',
+  ...MOVE_KEYS, 'Space', 'KeyE', 'KeyF', 'KeyQ', 'KeyB', 'KeyM', 'KeyL', 'KeyV',
   'KeyR', 'KeyN', 'KeyP', 'Digit1', 'Digit2', 'Digit3', 'Digit4', 'Digit5',
   'Digit6', 'Digit7', 'Digit8', 'Digit9', 'Enter',
 ]);
@@ -52,6 +56,18 @@ export function createInput(canvas) {
   let lastY = 0;
   // Pointer Lock state (v9 iteration 4).
   let locked = false;
+  // Lock suppression (v9 iteration 7, §2 overlay gate): requestPointerLock
+  // completes ASYNCHRONOUSLY, so a click can leave a lock request in
+  // flight that engages AFTER the game has left PLAY — the pause / shop
+  // / over handler's releaseLock() runs while the lock is not yet held
+  // and is a no-op, and the pointer ends up locked on a menu screen
+  // (the play-test caught this on pause: locked=true on the pause
+  // screen, the request having completed 800 ms after the click under
+  // a saturated headless renderer). releaseLock() therefore sets this
+  // flag, and the change handler exits any lock that engages while it
+  // is set. A fresh canvas click (the user is playing again) clears it
+  // before requesting, so the lock still works in play.
+  let lockSuppressed = false;
   let pointerX = 0;
   let pointerY = 0;
   let aiming = false;
@@ -71,7 +87,8 @@ export function createInput(canvas) {
       else if (event.code === 'KeyP' || event.code === 'Escape') actions |= ACTION_PAUSE;
       else if (event.code === 'KeyN') actions |= ACTION_MUTE;
       else if (event.code === 'KeyM') actions |= ACTION_MAP;
-      else if (event.code === 'KeyQ') actions |= ACTION_RADIO;
+      else if (event.code === 'KeyQ') actions |= ACTION_QUEST;
+      else if (event.code === 'KeyB') actions |= ACTION_RADIO;
       else if (event.code === 'KeyL') actions |= ACTION_NIGHT;
       else if (event.code === 'KeyV') actions |= ACTION_SPAWN_CAR;
       else if (event.code === 'KeyR') actions |= ACTION_RESTART;
@@ -104,6 +121,9 @@ export function createInput(canvas) {
       // Pointer Lock on left click: the mouse now turns the camera.
       // Guarded — a rejected lock (headless, cooldown after Esc, no
       // permission) falls through silently to the drag fallback.
+      // v9 iteration 7 (§2): the user is actively playing again, so a
+      // suppression set by an earlier overlay release is lifted here.
+      lockSuppressed = false;
       try {
         const p = canvas.requestPointerLock();
         if (p && typeof p.catch === 'function') p.catch(() => {});
@@ -117,6 +137,13 @@ export function createInput(canvas) {
   canvas.addEventListener('contextmenu', (event) => event.preventDefault());
   document.addEventListener('pointerlockchange', () => {
     locked = document.pointerLockElement === canvas;
+    // v9 iteration 7 (§2): a lock request that was in flight when an
+    // overlay released the lock engages here — exit it at once, so the
+    // pointer is never held on a menu screen. The flag stays set until
+    // the next canvas click, so a second late engagement is caught too.
+    if (locked && lockSuppressed && document.exitPointerLock) {
+      try { document.exitPointerLock(); } catch { /* already out */ }
+    }
   });
   window.addEventListener('pointermove', (event) => {
     if (locked) {
@@ -182,7 +209,12 @@ export function createInput(canvas) {
     lastAimAt() {
       return lastAimAt;
     },
+    // v9 iteration 7 (§2): suppress the lock as well as exiting it —
+    // a request already in flight engages after this call, and the
+    // change handler exits it on arrival (see above). Cleared by the
+    // next canvas click, when the user is playing again.
     releaseLock() {
+      lockSuppressed = true;
       if (locked && document.exitPointerLock) {
         try { document.exitPointerLock(); } catch { /* already out */ }
       }
