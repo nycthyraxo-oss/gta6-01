@@ -2461,8 +2461,14 @@ export function buildCity(scene, rng, cfg) {
       },
     };
     lightHeads.push({ x: j.x, z: j.z, mats });
+    // v9 iteration 7-fix: poles stand 14 m from the junction centre —
+    // 4 m past the curb (road band ends at 10 m), on the sidewalk
+    // corner. The old ±8 put them 2 m inside the road rect, standing
+    // on the asphalt; ±12 collided with the lamp poles at 11 m and a
+    // palm trunk at 12 m. Heads + lamps sit on the pole, so they move
+    // with it. The stop line stays at ±14.5, just past the pole.
     for (const [cx, cz] of [
-      [j.x - 8, j.z - 8], [j.x + 8, j.z - 8], [j.x - 8, j.z + 8], [j.x + 8, j.z + 8],
+      [j.x - 14, j.z - 14], [j.x + 14, j.z - 14], [j.x - 14, j.z + 14], [j.x + 14, j.z + 14],
     ]) {
       const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.12, 0.16, 5.5, 6), poleMat);
       pole.position.set(cx, 2.75, cz);
@@ -2499,14 +2505,25 @@ export function buildCity(scene, rng, cfg) {
     { x: -28, z: 28, name: 'PLAZA WAY' },
     { x: 28, z: 84, name: 'DOCKS RD' },
     { x: 84, z: -28, name: 'SUNSET DR' },
-    { x: -84, z: 84, name: 'DOCKS RD' },
+    // v9 iteration 7-fix: this sign's NE corner sits inside the
+    // building at (-68,100), so its pole takes the SE corner instead.
+    // Every other sign keeps the NE corner.
+    { x: -84, z: 84, name: 'DOCKS RD', corner: 'SE' },
     { x: 84, z: 56, name: 'BOARDWALK AVE' },
     { x: -28, z: -56, name: 'CINE ST' },
     { x: 56, z: -84, name: 'BAYVIEW LN' },
   ];
   for (const s of STREET_SIGNS) {
-    const px = s.x + 8.5;
-    const pz = s.z + 8.5;
+    // v9 iteration 7-fix: the pole stands 14 m from the intersection
+    // in both axes — 4 m past the curb (road band ends at 10 m), on
+    // the sidewalk corner. The old +8.5 put it 1.5 m ON the asphalt.
+    // 14 m also clears the lamp poles at 11 m, the benches at 11.5 m
+    // and the palms at 12 m. The blade still hangs 1.7 m from the
+    // pole toward the junction, pole at the blade's end.
+    const sx = 1;
+    const sz = s.corner === 'SE' ? -1 : 1;
+    const px = s.x + sx * 14;
+    const pz = s.z + sz * 14;
     const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.09, 0.12, 3.2, 6), poleMat);
     pole.position.set(px, 1.63, pz);
     pole.userData.cat = 'sign'; // v9 iteration 7 (§3)
@@ -3215,6 +3232,10 @@ export function buildCity(scene, rng, cfg) {
       // at least the blade half-length (1.6) minus a 0.3 tolerance.
       const along = Math.abs((s.bladeX - s.px) * s.axisX + (s.bladeZ - s.pz) * s.axisZ);
       const poleOffset = Math.round(along * 100) / 100;
+      // v9 iteration 7-fix: the pole itself must stand OFF the road
+      // (on the sidewalk corner). The old +8.5 offset put every pole
+      // 1.5 m onto the asphalt and no check caught it.
+      const poleOnRoad = roadHitPoint(s.px, s.pz);
       // A lamp pole within 1 m of the blade segment can hide the text
       // from an approach angle, so that is flagged too.
       let lampNear = null;
@@ -3228,8 +3249,8 @@ export function buildCity(scene, rng, cfg) {
           break;
         }
       }
-      if (poleOffset < 1.3 || lampNear) {
-        out.signs.push({ name: s.name, x: s.x, z: s.z, poleOffset, lampNear });
+      if (poleOffset < 1.3 || lampNear || poleOnRoad) {
+        out.signs.push({ name: s.name, x: s.x, z: s.z, poleOffset, lampNear, poleOnRoad });
       }
     }
     for (let i = 0; i < rampMeshes.length; i += 1) {

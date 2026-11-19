@@ -313,18 +313,22 @@ export const CONFIG = {
   },
   // Traffic lights: one city-wide cycle, so every junction changes
   // together and the player can read the rhythm. Green 7 s, yellow 1.5 s,
-  // then the other axis. The six junctions are the busiest crossings.
+  // then the other axis. The six junctions are the busiest crossings —
+  // every one is a real crossing: both coords sit on road lines
+  // (-140, -84, -28, 28, 84, 140). A junction anywhere else puts its
+  // poles in a block or on a straight road (v9 iteration 7-fix: the old
+  // (0,0), (-56,0), (0,56) and (56,28) were mid-block, not crossings).
   lights: {
     greenSeconds: 7,
     yellowSeconds: 1.5,
     stopDistance: 12,
     junctions: [
-      { x: 0, z: 0 },
-      { x: -56, z: 0 },
+      { x: -84, z: 28 },
+      { x: 84, z: -84 },
       { x: 28, z: -28 },
-      { x: 0, z: 56 },
+      { x: 84, z: 84 },
       { x: -28, z: -84 },
-      { x: 56, z: 28 },
+      { x: 28, z: 140 },
     ],
   },
   // Ten hidden packages, $50 each, tucked into alleys, parks, the beach

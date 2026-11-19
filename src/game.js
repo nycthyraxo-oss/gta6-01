@@ -3837,21 +3837,6 @@ export function createGame(canvas, seed) {
           }
           return worst;
         };
-        // Distance from a footprint to the nearest edge of any road rect
-        // it overlaps (Infinity if it overlaps none). Junction-corner
-        // furniture sits ~2 m inside the edge by design; a pole deep in
-        // the road is far from every edge.
-        const roadEdgeDist = (x0, x1, z0, z1) => {
-          let best = Infinity;
-          for (const r of roads) {
-            const ox = Math.min(x1, r.x1) - Math.max(x0, r.x0);
-            const oz = Math.min(z1, r.z1) - Math.max(z0, r.z0);
-            if (ox > 0 && oz > 0) {
-              best = Math.min(best, r.x1 - x1, x0 - r.x0, r.z1 - z1, z0 - r.z0);
-            }
-          }
-          return best;
-        };
         const out = {
           meshes: 0, instances: 0, placeables: 0, flat: 0, elevated: 0, huge: 0,
           overlaps: [], uncategorised: [], cornerPoles: 0, cornerPolesOffRoad: 0, byCategory: {},
@@ -3912,22 +3897,23 @@ export function createGame(canvas, seed) {
           // drivable). Same precedent as the 'dock' exemption above.
           if (c === 'ramp') return;
           // Junction-corner furniture (traffic-light + street-sign
-          // poles): they stand at the corner of an intersection, ~2 m
-          // inside the road rect's edge, by design. They pass if they
-          // sit within 2.5 m of the road edge — a pole deep in the road
-          // (a real misplacement) fails. A pole that overlaps NO road
-          // rect at all (edge === Infinity) is off-road, not deep in
-          // one — it passes this check. (v9 iteration 7: three of the
-          // six signalled junctions — (0,0), (-56,0), (0,56) — are not
-          // road crossings, so their 12 poles overlap no road and were
-          // wrongly flagged. Whether those junctions belong there is a
-          // design decision, not a road violation; see the probe notes.)
+          // poles): the POLE must stand on the sidewalk, clear of
+          // every road rect. Any overlap with a road rect (> 0.05 m)
+          // is a misplacement and fails — the old rule allowed poles
+          // up to 2.5 m inside the road edge "by design", which is
+          // exactly how poles ended up standing on the asphalt (the
+          // user caught all 8 street signs + the light poles on the
+          // road in the 19 Nov playtest). Blades and heads never reach
+          // this branch: they are elevated (base >= 2 m) and return
+          // above, so this rule reads the POLE mesh only. A pole that
+          // overlaps NO road rect is off-road — the correct state —
+          // and passes.
           if (c === 'traffic-light' || c === 'sign') {
-            const edge = roadEdgeDist(x0, x1, z0, z1);
+            const hit = roadHit(x0, x1, z0, z1);
             out.cornerPoles += 1;
-            if (edge === Infinity) out.cornerPolesOffRoad += 1;
-            if (edge !== Infinity && edge > 2.5) {
-              out.overlaps.push({ cat: c, x: r1((x0 + x1) / 2), z: r1((z0 + z1) / 2), w: r1(w), d: r1(d), road: 'corner-pole too deep', depth: r1(edge) });
+            if (!hit) out.cornerPolesOffRoad += 1;
+            if (hit) {
+              out.overlaps.push({ cat: c, x: r1((x0 + x1) / 2), z: r1((z0 + z1) / 2), w: r1(w), d: r1(d), road: 'corner-pole on road', ...hit });
             }
             return;
           }
