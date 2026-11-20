@@ -8,8 +8,8 @@
 export const CONFIG = {
   seed: 20261117,
   world: {
-    blockSize: 42,
-    roadWidth: 14,
+    blockSize: 36,
+    roadWidth: 20,
     blocks: 5,
     beachX: 150,
     seaX: 178,
@@ -23,16 +23,41 @@ export const CONFIG = {
     runSpeed: 12,
     radius: 0.55,
     height: 1.8,
+    // Jump (v9 iteration 3): deterministic — one upward velocity, one
+    // gravity, land exactly on y = 0. No double-jump, no randomness.
+    jumpSpeed: 7.5,
+    jumpGravity: 24,
     maxHealth: 100,
     maxArmour: 100,
     armourOnJob: 20,
     repPerJob: 10,
     repPerPackage: 2,
+    repPerRace: 5,
+    repPerStunt: 1,
+    repPerDelivery: 3,
     shootRange: 55,
     shootDamage: 34,
     shootCooldown: 0.22,
     enterCarRange: 4.5,
     respawnCost: 200,
+    // Pistol ammo (v9 iteration 4): the pistol is no longer infinite.
+    // 24 rounds on the belt, 60 max; Ammu-Nation sells 12 for $25.
+    pistolAmmo: 24,
+    pistolAmmoMax: 60,
+  },
+  // Weapons (v9 iteration 3): slot 1 pistol (infinite, as before), slot 2
+  // knife (melee, infinite), slot 3 bazooka (limited rockets). All damage
+  // flat and deterministic — no randomness anywhere in a weapon.
+  // v9 iteration 4: the pistol is limited ammo now, and the Ammu-Nation
+  // shop sells three more slots — SMG (REP 20), Shotgun (REP 40), Rifle
+  // (REP 60) — each with its own ammo pool, all bought, never infinite.
+  weapons: {
+    pistol: { ammoPrice: 25, ammoPack: 12 },
+    knife: { range: 2.4, damage: 50, cooldown: 0.35 },
+    bazooka: { rockets: 8, rocketSpeed: 42, blastRadius: 6, blastDamage: 60, cooldown: 0.9, range: 60, rocketPrice: 60, rocketPack: 4 },
+    smg: { rep: 20, price: 400, damage: 22, cooldown: 0.09, range: 45, ammo: 90, maxAmmo: 180, ammoPrice: 30, ammoPack: 30, perp: 1.2 },
+    shotgun: { rep: 40, price: 800, damage: 60, cooldown: 0.7, range: 18, ammo: 24, maxAmmo: 48, ammoPrice: 30, ammoPack: 8, perp: 2.2 },
+    rifle: { rep: 60, price: 1200, damage: 55, cooldown: 0.16, range: 70, ammo: 40, maxAmmo: 120, ammoPrice: 30, ammoPack: 20, perp: 1.2 },
   },
   car: {
     accel: 22,
@@ -50,8 +75,8 @@ export const CONFIG = {
     policeSpeed: 30,
     conditionMinSpeed: 0.75,
   },
-  traffic: { count: 14, minGap: 9 },
-  pedestrians: { count: 26, walkSpeed: 1.6, fleeSpeed: 4.2, fleeRadius: 18 },
+  traffic: { count: 22, minGap: 9 },
+  pedestrians: { count: 34, walkSpeed: 1.6, fleeSpeed: 4.2, fleeRadius: 18 },
   police: {
     sightRange: 55,
     respawnMin: 85,
@@ -59,6 +84,11 @@ export const CONFIG = {
     arrestRange: 3.0,
     arrestTime: 2.0,
     ramDamage: 6,
+    // v9 iteration 3: a short grace window after the first heat — the
+    // police spawn immediately but hold their reaction, so one accidental
+    // shot is never an instant death. patrolSpeed is the 1-star cruise.
+    graceSeconds: 4,
+    patrolSpeed: 8,
     maxCars: 4,
     maxOfficers: 3,
     heatPerStar: 100,
@@ -67,15 +97,164 @@ export const CONFIG = {
     hitPedHeat: 40,
     hitCarHeat: 12,
     shootHeat: 25,
+    // v9 iteration 5 (§4): a witness who finishes their 3 s report.
+    witnessHeat: 15,
     roadblockStars: 3,
     heliStars: 4,
     heliHeight: 55,
     heliSpotRadius: 9,
     searchZoneBase: 60,
     searchZonePerStar: 15,
+    // v9 iteration 4: 4 stars is heavy tactical — a 5th cruiser (TACTICAL,
+    // 1.1× speed) plus a second roadblock pair ahead as a coordinated
+    // ambush; 5 stars is MAXIMUM — the heli spotlight tracks the player.
+    maxCarsTactical: 5,
+    ambushStars: 4,
+    spotlightStars: 5,
   },
   economy: {
     resprayCost: 150,
+    // v9 iteration 4: money is a progression sink now. V costs $25 a car,
+    // a bribe takes 1 star off for $100, a repair is $80, armour $100.
+    spawnCarCost: 25,
+    bribeCost: 100,
+    repairCost: 80,
+    armourPrice: 100,
+  },
+  // v9 iteration 5: the two money sinks. Both on protected blocks, clear
+  // of mission lines, spawn, package spots and the docks duel. The gun
+  // shop sells weapons and ammo; Pay 'n' Spray repairs, repaints and
+  // takes bribes.
+  shops: {
+    gun: { x: -128, z: 40, name: 'AMMU-NATION COSTA' },
+    spray: { x: 96, z: 112, name: "PAY 'N' SPRAY" },
+    // v9 iteration 5: the outfit shop — a beachfront boutique on the
+    // boardwalk that sells shirt colours (cosmetic player colours).
+    outfit: { x: 160, z: -28, name: 'NEON BOUTIQUE' },
+  },
+  // v9 iteration 5: street names — our own names, one per road line.
+  // Avenues run north-south (constant x), streets east-west
+  // (constant z). The HUD reads "Fuego Ave · DOWNTOWN".
+  // v9 iteration 6: English names — the Indonesian "Jalan ..." set read
+  // as the whole game being in Indonesian.
+  streetNames: {
+    avenues: {
+      '-140': 'Harbor Ave', '-84': 'Liberty Ave', '-28': 'Jasmine Ave',
+      '28': 'Fuego Ave', '84': 'Rose Ave', '140': 'Beach Ave',
+    },
+    streets: {
+      '-140': 'Garuda St', '-84': 'Melati St', '-28': 'Coral St',
+      '28': 'Orchid St', '84': 'Sudirman St', '140': 'Seaside St',
+    },
+  },
+  // v9 iteration 5: REP ranks — named titles, our own. Each rank unlocks
+  // jobs + gear (race 2 needs REP 20, race 3 REP 50, The Big Score REP 30).
+  // v9 iteration 6: English rank names.
+  repRanks: [
+    { rep: 0, name: 'NEW KID' },
+    { rep: 25, name: 'HUSTLER' },
+    { rep: 60, name: 'PLAYER' },
+    { rep: 120, name: 'HOTSHOT' },
+    { rep: 200, name: 'KING OF THE STREETS' },
+    { rep: 350, name: 'COSTA LEGEND' },
+  ],
+  // v9 iteration 5: six skills, each 0-5, each with a small real effect.
+  // Driving +2% top speed/level, Stamina +3% run speed/level, Aim +5%
+  // hit tolerance/level, Stealth -5% heat gain/level, Influence -3%
+  // shop prices/level, Street Sense shows packages + medals on the map
+  // from level 2. XP thresholds per level: 10/25/45/70/100.
+  skills: {
+    driving: { xpPer: 100, label: 'Driving' },
+    stamina: { xpPer: 10, label: 'Stamina' },
+    aim: { xpPer: 1, label: 'Aim' },
+    stealth: { xpPer: 1, label: 'Stealth' },
+    influence: { xpPer: 1, label: 'Influence' },
+    street: { xpPer: 1, label: 'Street Sense' },
+  },
+  skillLevels: [0, 10, 25, 45, 70, 100],
+  // v9 iteration 5: 24 Fuego Medals hidden across the map — gold coins
+  // on the roads, the pier, the beach, the plaza and the island. $100
+  // each, and the full set pays a $5,000 bonus.
+  medals: {
+    count: 24,
+    reward: 100,
+    bonus: 5000,
+    pickupRadius: 2.6,
+  },
+  // v9 iteration 5: three street races. Race 1 is the old garage-road
+  // sprint; race 2 is the Coral Row dash (REP 20); race 3 is the Pantai
+  // grand tour around the whole east side (REP 50).
+  races: [
+    {
+      name: 'Fuego Ave Sprint', repReq: 0, timeLimit: 75, prize: 300, rep: 5,
+      start: { x: -28, z: 84 },
+      checkpoints: [{ x: 84, z: 84 }, { x: 84, z: -28 }],
+      finish: { x: -28, z: -28 },
+    },
+    {
+      name: 'Coral Row Dash', repReq: 20, timeLimit: 75, prize: 500, rep: 8,
+      start: { x: -84, z: 28 },
+      checkpoints: [{ x: -84, z: -84 }, { x: 28, z: -84 }],
+      finish: { x: 28, z: 28 },
+    },
+    {
+      name: 'Beach Grand Tour', repReq: 50, timeLimit: 90, prize: 800, rep: 12,
+      start: { x: 84, z: 84 },
+      checkpoints: [{ x: 84, z: -140 }, { x: -140, z: -140 }],
+      finish: { x: -140, z: 84 },
+    },
+  ],
+  // v9 iteration 5: courier side jobs for Marla's contacts — pick up at
+  // the marker, deliver before the clock runs out. REP-gated like the
+  // races: job 2 needs REP 10, job 3 needs REP 25.
+  deliveries: [
+    { name: 'Coffee for Marla', repReq: 0, timeLimit: 90, prize: 200,
+      pickup: { x: -84, z: 28 }, drop: { x: 0, z: 112 } },
+    { name: 'Mercado Package', repReq: 10, timeLimit: 75, prize: 250,
+      pickup: { x: 56, z: -84 }, drop: { x: 56, z: -56 } },
+    { name: 'Delivery to the Garage', repReq: 25, timeLimit: 120, prize: 400,
+      pickup: { x: 158, z: 0 }, drop: { x: -112, z: 112 } },
+  ],
+  // v9 iteration 5: the causeway + island district east of Fuego Pier.
+  // The gate at the causeway mouth opens as the player approaches.
+  island: {
+    x0: 222, x1: 272, z0: 72, z1: 128,
+    gate: { x: 209, z: 100 },
+    name: 'Fuego Island',
+  },
+  // v9 iteration 5: graphics presets. LOW drops the pixel ratio, bloom
+  // and shadows and thins the traffic + crowd; HIGH pushes them up.
+  // The pause-menu sliders override the preset's traffic/crowd counts.
+  presets: {
+    LOW: { pixelRatio: 1, bloom: false, shadows: false, shadowSize: 512, traffic: 10, pedestrians: 12, far: 400, fogMul: 1.3 },
+    MED: { pixelRatio: 1.5, bloom: true, shadows: true, shadowSize: 1024, traffic: 22, pedestrians: 34, far: 900, fogMul: 1 },
+    HIGH: { pixelRatio: 2, bloom: true, shadows: true, shadowSize: 2048, traffic: 30, pedestrians: 44, far: 1200, fogMul: 0.8 },
+  },
+  // v9 iteration 4: free-roam side activities. The street race starts on
+  // the garage road and runs three intersections for $300 + 5 REP; the
+  // three stunt ramps sit on road shoulders, clear of junctions and
+  // mission lines — hit one over 15 m/s and the car flies.
+  // v9 iteration 5: cfg.race is race 1 of cfg.races (kept as the alias
+  // for the HUD + staging); the game runs all three races from cfg.races.
+  race: {
+    start: { x: -28, z: 84 },
+    checkpoints: [{ x: 84, z: 84 }, { x: 84, z: -28 }],
+    finish: { x: -28, z: -28 },
+    timeLimit: 75,
+    prize: 300,
+  },
+  stunts: {
+    // v9 iteration 5: the first landing on a ramp pays firstPrize,
+    // every repeat landing pays prize.
+    prize: 50,
+    firstPrize: 500,
+    // v9 iteration 5: six ramps — the old three plus three more on the
+    // east-west roads. `axis` is the launch direction ('x' along an
+    // east-west road, 'z' along a north-south one).
+    ramps: [
+      { x: 33, z: 56, axis: 'z' }, { x: -135, z: -56, axis: 'z' }, { x: 56, z: -135, axis: 'x' },
+      { x: -100, z: 28, axis: 'x' }, { x: 100, z: -28, axis: 'x' }, { x: -100, z: 84, axis: 'x' },
+    ],
   },
   // Neon night: the look the L key switches to. Dusk is the default; night
   // is a dark sky, a moon-cold sun, and the street lamps turned all the way
@@ -92,8 +271,9 @@ export const CONFIG = {
     streetlight: 18,
   },
   // Spawn-a-car (V): a fast car on demand, with a cooldown and a cap so
-  // the city never floods with them.
-  spawnCarCooldown: 3,
+  // the city never floods with them. v9 iteration 4: it costs $25 a car
+  // now (money as a progression sink) and the cooldown is 20 s.
+  spawnCarCooldown: 20,
   spawnCarMax: 4,
   // Wanted evaded: how long after an escape the heat cannot rise again.
   evadeCooldown: 3,
@@ -120,27 +300,35 @@ export const CONFIG = {
     pitchMax: 0.9,
   },
   time: {
-    // The game lives at golden hour: a slow day (30 min per day) that
-    // starts at dusk, and the light code floors the dusk factor so the
-    // sunset never slides back into noon mid-session.
+    // v9 iteration 4: a continuous day cycle, not a binary toggle. The
+    // clock runs a slow day (30 min per day) from 18:24, and the light
+    // code interpolates keyframes by the hour — night, dawn, day, dusk,
+    // night — so the sky dome, sun, hemisphere light and fog density all
+    // move with the HUD clock. The dusk plateau (17.5–19.5) holds the old
+    // golden-hour look exactly, so staged shots still render the same dusk.
+    // L skips time forward 2 h instead of toggling night.
     dayLength: 1800,
     startHour: 18.4,
     duskHour: 18.5,
   },
   // Traffic lights: one city-wide cycle, so every junction changes
   // together and the player can read the rhythm. Green 7 s, yellow 1.5 s,
-  // then the other axis. The six junctions are the busiest crossings.
+  // then the other axis. The six junctions are the busiest crossings —
+  // every one is a real crossing: both coords sit on road lines
+  // (-140, -84, -28, 28, 84, 140). A junction anywhere else puts its
+  // poles in a block or on a straight road (v9 iteration 7-fix: the old
+  // (0,0), (-56,0), (0,56) and (56,28) were mid-block, not crossings).
   lights: {
     greenSeconds: 7,
     yellowSeconds: 1.5,
     stopDistance: 12,
     junctions: [
-      { x: 0, z: 0 },
-      { x: -56, z: 0 },
+      { x: -84, z: 28 },
+      { x: 84, z: -84 },
       { x: 28, z: -28 },
-      { x: 0, z: 56 },
+      { x: 84, z: 84 },
       { x: -28, z: -84 },
-      { x: 56, z: 28 },
+      { x: 28, z: 140 },
     ],
   },
   // Ten hidden packages, $50 each, tucked into alleys, parks, the beach
@@ -150,6 +338,28 @@ export const CONFIG = {
     count: 10,
     reward: 50,
     pickupRadius: 2.6,
+  },
+  // v9 graphics: the rainy neon city. Lit facade windows glow through
+  // an emissive map (facadeEmissive scales it); rain falls in a box
+  // around the camera (count streaks, fallSpeed m/s down, windSpeed m/s
+  // sideways), with splashRings reusable splash rings on the ground.
+  // v9 iteration 4: bloom threshold 0.9 — only emissiveIntensity > 1
+  // blooms (neon signs, lamp bulbs, headlights, tracers, flashes). The
+  // facade windows sit at 0.9 on purpose: they glow, they do not bloom.
+  graphics: {
+    facadeEmissive: 0.9,
+    bloomThreshold: 0.9,
+    bloomStrength: 0.45,
+    bloomRadius: 0.4,
+  },
+  rain: {
+    count: 600,
+    fallSpeed: 38,
+    windSpeed: 4,
+    boxX: 34,
+    boxY: 26,
+    boxZ: 34,
+    splashRings: 10,
   },
   saveKey: 'costa-fuego.save.v3',
   palette: {
@@ -336,10 +546,14 @@ export const MISSION_DEFS = [
   },
 ];
 
-// Radio stations: three synthesized stations the player can cycle with Q.
-// Each has its own note set and step length, so the music actually changes.
+// Radio stations: synthesized stations the player can cycle with Q.
+// v9 iteration 4: 88.5 COSTA FM (synthwave/latin) and 102.4 REEF BEATS
+// (hip-hop/drill, slow low steps) join the old two, plus a RADIO OFF
+// state — Q cycles five states. Each has its own note set and step
+// length, so the music actually changes.
 export const RADIO_STATIONS = [
-  { name: '88.5 COSTA FM', notes: [220, 261.63, 329.63, 392, 329.63, 261.63, 196, 246.94], step: 0.42, bass: true },
+  { name: '88.5 COSTA FM', notes: [220, 261.63, 329.63, 392, 311.13, 261.63, 196, 246.94], step: 0.42, bass: true },
+  { name: '102.4 REEF BEATS', notes: [110, 110, 130.81, 98, 110, 164.81, 98, 110], step: 0.62, bass: true },
   { name: '92.1 NEON NIGHT', notes: [174.61, 220, 261.63, 220, 196, 174.61, 146.83, 196], step: 0.34, bass: true },
   { name: '97.3 PLAYA DUB', notes: [130.81, 164.81, 196, 164.81, 130.81, 98, 116.54, 146.83], step: 0.55, bass: true },
 ];

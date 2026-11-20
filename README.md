@@ -55,16 +55,39 @@ drive the boardwalk at dusk.
   Cars take damage now: crashes and police rams lower the condition, and a
   battered car runs slower — the speedo shows the condition, and a respray
   at Taller Marla fixes it up.
-- **Traffic and pedestrians:** 14 AI cars cruising the road grid, 26
-  pedestrians on the sidewalks who flee gunfire, and vendors at the mercado.
+- **Traffic and pedestrians:** 22 AI cars cruising the road grid — they
+  brake for cars and pedestrians ahead, turn at junctions, and stop at
+  red lights (yellow means stop if there is room) — plus 34 pedestrians
+  walking waypoint loops on the sidewalk rings who flee gunfire, and
+  vendors at the mercado. Parked cars stand at the road edge, clear of
+  the traffic lanes, so the city keeps moving.
+- **Solid buildings:** every building is a solid collider — the player,
+  cars, pedestrians and police are all pushed out of walls instead of
+  walking through them. A respray at Taller Marla triggers from the
+  road in front of the garage.
+- **Memory:** cars are built from shared cached geometry and materials,
+  so a long session does not grow VRAM: whenever a car leaves the scene
+  (a V spawn evicts the oldest car, a respray rebuilds the paint, the
+  police stand down) its per-instance resources — light materials, the
+  van's checker band, the cabrio's windshield, the Interceptor's livery
+  and light bar — are disposed first. The shared caches are never freed,
+  so the other cars are untouched.
 - **Wanted level and police:** 0–5 stars. Stealing, hitting people or cars,
-  and shooting raise heat. Police cars chase and ram; on foot, officers
-  close in and arrest. Break line of sight and get far away and the stars
-  cool off one at a time. At 4 stars the helicopter leaves its patrol
-  circle, hovers over you and pins you in its searchlight — while the beam
-  is on you the heat will not cool, and the HUD says so. The pursuer panel
-  names every chaser, its distance and what it is doing: RAMMING, CHASING,
-  SEARCHING, ARRESTING, SPOTLIGHT ON YOU.
+  and shooting raise heat. One shot is 1 star, and 1 star is not a death
+  sentence: the police spawn at once but hold for a 4-second grace window
+  (the HUD warns you), then escalate by star — 1★ OBSERVE (patrol the
+  roads, no chase, no ram, no arrest), 2★ FOLLOW (chase at 0.6×, hold a
+  12-unit standoff, no ram, no arrest, one officer who holds at 6),
+  3★ PURSUE (chase 0.85×, ramming on, roadblocks, two officers, arrest
+  2.5 s), 4★ AGGRESSIVE (chase 1.0×, ramming on, helicopter, three
+  officers, arrest 2.0 s), 5★ MAXIMUM (chase 1.15×, ramming on, heli,
+  roadblocks, three officers, arrest 1.5 s). Break line of sight and get
+  far away and the stars cool off one at a time. At 4 stars the helicopter
+  leaves its patrol circle, hovers over you and pins you in its
+  searchlight — while the beam is on you the heat will not cool, and the
+  HUD says so. The pursuer panel names every chaser, its distance and
+  what it is doing: RESPONDING, PATROLLING, FOLLOWING, RAMMING, CHASING,
+  SEARCHING, HOLDING, ARRESTING, SPOTLIGHT ON YOU.
 - **Missions and story:** six jobs for Marla Quinn with briefings,
   objective markers, a beacon, minimap blips and timers where they fit:
   Homecoming, Hot Wheels, The Drop, Heat, Payback (four armed Reef Kings at
@@ -82,13 +105,12 @@ drive the boardwalk at dusk.
   on the marina pier, in the tower plaza, at a mercado stall, by the
   hospital wall, in a north-end alley, at a downtown kiosk. $50 each, paid
   on the spot, tracked on the HUD and kept in the save.
-- **Neon night (L):** the city has two looks — the default golden hour and
-  a neon night (dark sky, moon-cold light, street lamps all the way up, the
-  lit windows reading brighter by contrast). One key switches between them;
-  the staged screenshots always render the same dusk.
+- **Time (L):** the day runs on a continuous cycle — night, dawn, day,
+  dusk — and L skips the clock forward two hours. The staged screenshots
+  always render the same dusk.
 - **Spawn a car (V):** a Furia Sport pulls up on the nearest road, yours for
-  the taking — a sandbox toy, no heat, no cost, with a short cooldown and a
-  cap of four so the city never floods.
+  the taking — $25 a car, with a short cooldown and a cap so the city
+  never floods.
 - **Neon Plaza:** a central plaza landmark one block east of the tower — a
   paved circle, a fountain with a glowing water disc and neon rings around
   its column, benches and palms. It is named on the city map.
@@ -114,7 +136,7 @@ drive the boardwalk at dusk.
 - **Polish:** dusk sky, shadows, headlights and taillights, impact
   particles, screen shake, and engine, siren and gunshot sounds synthesized
   with WebAudio — no audio files, no network request. The radio cycles
-  three stations (Q).
+  three stations (B).
 
 ## How to run
 
@@ -137,15 +159,17 @@ node serve.ts --port 8081
 |---|---|
 | WASD | Move / drive |
 | Shift | Run / boost |
-| E | Enter or exit a car |
-| Space | Brake / handbrake |
-| Mouse drag | Camera |
-| F or click | Shoot |
+| E | Enter or exit a car / open a shop |
+| Space | Jump (on foot) / brake, handbrake (in a car) |
+| 1–6 | Switch weapon: pistol / knife / bazooka / SMG / shotgun / rifle (ammo is limited; shop weapons are REP-gated) |
+| Mouse | Camera (Pointer Lock, drag fallback) |
+| F or click | Shoot / swing the knife / fire a rocket |
 | Enter | Start game from the title screen |
 | M | City map |
-| Q | Radio (next station) |
-| L | Neon night (dusk / night) |
-| V | Spawn a fast car nearby |
+| B | Radio (next station) |
+| Q | Collapse / expand the quest panel |
+| L | Skip time forward 2 h |
+| V | Spawn a fast car nearby ($25) |
 | P | Pause (toggles) |
 | N | Mute |
 | R | Restart mission |
@@ -173,6 +197,7 @@ game/
     random.js           seeded RNG (mulberry32)
     trafficlights.js    the city-wide traffic-light cycle
     packages.js         the ten hidden packages
+    medals.js           the 24 collectible medals
     shots.js            the four screenshot scenes, named
 main.ts                 the entry program: copies game/ + screenshots/ to
                         /output and writes /output/dossier.json
@@ -180,38 +205,40 @@ main.ts                 the entry program: copies game/ + screenshots/ to
 
 ## Validation
 
-- **Local check** (`node cli/makefun.mjs check`, 18 Nov 2026): 4 passed,
+- **Local check** (`node cli/makefun.mjs check`, 20 Nov 2026): 4 passed,
   0 failed, 16 skipped, 5 at-submission items (repo_public, repo_owner,
   repo_created_after_open, commit_in_repo, duplicate_snapshot — all resolved
   at submit time by the public GitHub repo).
 - **Determinism:** `main.ts` run twice into two directories — `diff -r`
-  byte-identical; the 4 screenshot renders re-run three times —
-  byte-identical (same SHA-256 for all 4 JPEGs and shots.json).
+  byte-identical; the 4 screenshot renders re-run — byte-identical
+  (same SHA-256 for all 4 JPEGs and shots.json).
+- **Probe** (headless Chrome over CDP, 20 Nov 2026): 89 passed, 0 failed —
+  full check suite including traffic flow, pedestrian movement, building
+  solidity, pairwise building overlaps (0), traffic-light poles on
+  sidewalks (32 corner poles, all off-road) and the placement audit.
 - **Play-test** (headless Chrome over CDP, real keyboard/mouse input,
-  18 Nov 2026): 37/37 passed — title → start, WASD walking, mission 1
-  completes live with $300 (cash $450) and mission 2 starts, E steals a
-  parked car and wanted rises to 1 star with a cruiser in pursuit, driving
-  accelerates, E exits the car, roadblock spawns at 3 stars, searchlight
-  helicopter activates at 4 stars and stands down when the heat clears,
-  M opens the city map and closes it, P toggles pause both ways, autosave
-  writes localStorage and Continue resumes the same mission and cash after
-  reload, respawn costs $200 at the hospital, the staged combat shot
+  20 Nov 2026): 78 passed, 5 failed. The 5 are software-rendering
+  limits, not game bugs: under SwiftShader the game runs at ~0.02× real
+  time, so the blind walk-to-garage seeker exhausts its 30-step budget
+  26 m short (the walk itself works — 52 m → 26 m on the correct
+  heading) and its payout/mission-2 cascades fail with it, plus one
+  pointer-lock timing race (the lock engaged after the pause handler
+  ran; the suppression path exits it on arrival, the read was just
+  early). Everything else passes: title → start, WASD walking, E steals
+  a parked car and wanted rises to 1 star with a cruiser patrolling
+  (1 star observes, it does not chase), driving accelerates, E exits
+  the car, roadblock at 3 stars, searchlight helicopter at 4 stars,
+  M opens/closes the city map, P toggles pause both ways, autosave +
+  Continue across a reload, respawn −$200, the staged combat shot
   truthfully kills one Reef King (4 → 3 left), zero console errors.
-  Wanted-decay passed this run (heat 33 → 0 stars); it is timing-tight
-  on this VM — the game clock runs ~1/33 real time under SwiftShader, so
-  the same check failed in three earlier v7 runs (heat 33 → 0.15, 1.95,
-  2.40 in the 120 s poll) and on the clean v6 commit (heat 33 → 1.95) —
-  environment, not a regression. With bloom the seeker took 7m39s
-  wall-clock on this VM (vs ~2m06s before bloom); on real GPU hardware
-  the per-frame cost is negligible.
-- **Dossier:** `dossier.json` 778,652 B; `game/src` 15 files, 214,850 B;
-  `game/` 17 files, 899,275 B; 1 vendored three.js 670,681 B.
+- **Dossier:** `game/src` 16 files, 558,421 B; `game/` 725,578 B total
+  (1 vendored three.js included).
 - **Screenshots:** 4 JPEGs, 1280×800 — all real renders of the game's own
-  code, inspected frame by frame (v7, headless Chrome, 18 Nov 2026, zero
-  console errors). 1-chase.jpg 150,448 B (`a3401506…`), 2-combat.jpg
-  105,913 B (`392b67be…`), 3-map.jpg 95,422 B (`bec31473…`),
-  4-dialogue.jpg 105,710 B (`d3b5598e…`) — each ≤256 KiB, each
-  byte-identical across three render runs.
+  code, inspected frame by frame (v9, headless Chrome, 20 Nov 2026, zero
+  console errors). 1-chase.jpg 182,755 B (`e7e1effd…`), 2-combat.jpg
+  141,407 B (`5d1caad7…`), 3-map.jpg 99,619 B (`df7304c3…`),
+  4-dialogue.jpg 141,514 B (`7cb71f85…`) — each ≤256 KiB, each
+  byte-identical across two render runs.
 
 ## Honest limitations
 
@@ -220,16 +247,18 @@ main.ts                 the entry program: copies game/ + screenshots/ to
   rounded but still simple figures with no facial animation. The art
   direction is coherent, but it is simple on purpose — the entry spends
   its budget on systems, not on textures it cannot ship.
-- **No building interiors.** You can walk through buildings on foot (cars
-  are clamped to roads, so they cannot), and cars never deform — a hard
-  crash only slows you, lowers the condition and raises heat.
+- **No building interiors.** Buildings are solid — you cannot walk or
+  drive through them — but none of them can be entered. Cars never
+  deform either: a hard crash only slows you, lowers the condition and
+  raises heat.
 - **No multiplayer, no voice acting.** The story is told in briefing text
   and dialogue, not cutscenes. The radio is three synthesized station
   labels with different music, not real songs.
-- **Police AI is a chase, not a full pursuit system.** Officers ram and
-  arrest, roadblocks spawn at 3 stars, and the searchlight helicopter
-  chases at 4 stars — but there are no spike strips, and the helicopter
-  never shoots.
+- **Police AI escalates by star, it does not start at maximum.** 1 star
+  patrols and never rams or arrests, 2 stars follows at a distance,
+  ramming and arrest start at 3 stars, the searchlight helicopter chases
+  at 4 stars — but there are no spike strips, and the helicopter never
+  shoots.
 - **The helicopter reads through its searchlight, not its body.** At 4
   stars the heli flies at 55–64 m, above the third-person camera's upward
   tilt when near — in play you see its light cone, the ground pool and the

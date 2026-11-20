@@ -12,50 +12,78 @@
   #hud { position: fixed; inset: 0; pointer-events: none; display: none; z-index: 5; }
   .hud-box { position: absolute; color: #fff; text-shadow: 0 2px 4px rgba(0,0,0,.9), 0 0 2px #000;
     font-weight: 700; }
-  /* Mission banner, top-center: chapter chip + objective + distance + clock. */
-  #hud-banner { top: 14px; left: 50%; transform: translateX(-50%); display: flex; gap: 8px;
-    align-items: center; background: rgba(0,0,0,.55); padding: 10px 14px; border-radius: 6px;
-    font-size: 18px; width: max-content; max-width: 96vw; flex-wrap: nowrap; justify-content: center; }
-  @media (max-width: 900px) {
-    #hud-banner { font-size: 15px; padding: 8px 12px; gap: 8px; }
-    #hud-chapter, #hud-stage { font-size: 12px; }
-    #hud-clock { font-size: 14px; }
-  }
-  #hud-chapter { background: #e83e6b; padding: 3px 9px; border-radius: 4px; font-size: 15px;
+  /* Quest panel, top-left (v9 iteration 7): the old top-centre mission
+     banner is gone — the objective lives here now, one line (chapter +
+     short objective), minimizable to a tiny QUEST chip. The full
+     objective text, NEXT chapter, dialogue log and weapon list sit
+     inside the scrollable body — small text, tucked away, not deleted. */
+  #hud-quest { position: absolute; top: 14px; left: 18px; width: 300px; max-width: 46vw;
+    background: rgba(0,0,0,.55); border-radius: 6px; padding: 8px 10px;
+    font-size: 13px; color: #fff; font-weight: 700; pointer-events: auto;
+    text-shadow: 0 2px 4px rgba(0,0,0,.9), 0 0 2px #000; }
+  #hud-quest-head { display: flex; align-items: center; gap: 6px; }
+  #hud-quest-title { font-size: 11px; letter-spacing: 2px; color: #ffd23e; }
+  #hud-quest-toggle { margin-left: auto; flex: none; cursor: pointer; background: rgba(255,255,255,.12);
+    color: #fff; border: 1px solid rgba(255,255,255,.35); border-radius: 4px;
+    font-size: 12px; font-weight: 700; line-height: 1; padding: 3px 8px; }
+  #hud-quest-toggle:hover { background: rgba(255,255,255,.25); }
+  #hud-quest-body { margin-top: 6px; max-height: 170px; overflow-y: auto; }
+  #hud-quest.collapsed #hud-quest-body { display: none; }
+  #hud-quest-line1 { display: flex; align-items: center; gap: 6px; }
+  #hud-chapter { background: #e83e6b; padding: 2px 7px; border-radius: 4px; font-size: 11px;
     letter-spacing: 1px; flex: none; }
-  #hud-stage { background: #2a7a8c; padding: 3px 9px; border-radius: 4px; font-size: 15px;
+  #hud-stage { background: #2a7a8c; padding: 2px 7px; border-radius: 4px; font-size: 11px;
     letter-spacing: 1px; flex: none; }
-  #hud-objective { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  #hud-target-dist { color: #7dff8a; flex: none; }
-  #hud-clock { opacity: .85; font-size: 18px; flex: none; }
-  /* Stage progress bar under the banner, and the next job after this one. */
-  #hud-stagebar { position: absolute; top: 70px; left: 50%; transform: translateX(-50%);
-    width: 340px; max-width: 60vw; height: 6px; background: rgba(0,0,0,.55); border-radius: 3px;
+  #hud-objective { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; }
+  #hud-target-dist { color: #7dff8a; flex: none; font-size: 13px; }
+  #hud-clock { opacity: .85; font-size: 12px; margin-top: 4px; }
+  /* Stage progress bar inside the quest panel, and the next job after this one. */
+  #hud-stagebar { margin-top: 6px; width: 100%; height: 5px; background: rgba(0,0,0,.55); border-radius: 3px;
     overflow: hidden; }
   #hud-stagebar-fill { height: 100%; width: 0%; background: #ffd23e; }
-  #hud-next { position: absolute; top: 80px; left: 50%; transform: translateX(-50%);
-    font-size: 14px; letter-spacing: 1px; color: #ffd23e; display: none;
-    background: rgba(0,0,0,.55); padding: 3px 10px; border-radius: 4px; }
-  /* Spotlight banner: the heli has its beam on you. It lives in the empty
-     left column (under the chapter banner, above the minimap) so it never
-     covers a centred landmark sign in the 3D scene. */
-  #hud-spotlight { position: absolute; top: 60px; left: 18px;
-    background: rgba(255, 42, 34, .75); color: #fff; font-size: 18px; letter-spacing: 2px;
-    padding: 6px 16px; border-radius: 6px; display: none; animation: spotblink 0.8s steps(2) infinite; }
+  #hud-next { margin-top: 4px; font-size: 12px; letter-spacing: 1px; color: #ffd23e; display: none; }
+  #hud-quest-log { margin-top: 6px; border-top: 1px solid rgba(255,255,255,.2); padding-top: 4px;
+    font-size: 11px; line-height: 1.45; color: #eaf4ff; font-weight: 400; }
+  #hud-quest-log div { margin-top: 2px; }
+  #hud-quest-log b { color: #ffd23e; }
+  #hud-quest-weapons { margin-top: 6px; border-top: 1px solid rgba(255,255,255,.2); padding-top: 4px;
+    font-size: 12px; line-height: 1.5; color: #9aa0aa; font-weight: 400; }
+  @media (max-width: 900px) {
+    #hud-quest { width: 240px; }
+  }
+  /* Spotlight banner: the heli has its beam on you. Small, top-centre
+     under the message toast — never near the wanted stars (top-right)
+     or the quest panel (top-left) at shot width. Top 100px, not 56px:
+     a 2-line toast reaches ~y 64, so 56px let it cover the spotlight. */
+  #hud-spotlight { position: absolute; top: 100px; left: 50%; transform: translateX(-50%);
+    background: rgba(255, 42, 34, .75); color: #fff; font-size: 13px; letter-spacing: 1px;
+    padding: 4px 10px; border-radius: 6px; display: none; animation: spotblink 0.8s steps(2) infinite;
+    white-space: nowrap; }
   @keyframes spotblink { 50% { opacity: .45; } }
-  /* Top-right: heat label, wanted stars, cash, weapon slots, pursuers. */
-  #hud-right { top: 14px; right: 18px; text-align: right; font-size: 24px; line-height: 1.3; }
-  #hud-mode { font-size: 19px; letter-spacing: 1px; }
-  #hud-stars { font-size: 34px; letter-spacing: 4px; }
-  #hud-cash { color: #7dff8a; font-size: 30px; }
-  #hud-weapon { font-size: 20px; color: #eaf4ff; }
-  #hud-weapon2 { font-size: 16px; color: #9aa0aa; }
+  /* Top-right: heat label, wanted stars, cash, current weapon, pursuers.
+     Small now (v9 iteration 7) — the full weapon list lives in the
+     quest panel, and the stars stay compact. */
+  #hud-right { top: 14px; right: 18px; text-align: right; font-size: 18px; line-height: 1.3; }
+  #hud-mode { font-size: 14px; letter-spacing: 1px; }
+  #hud-stars { font-size: 24px; letter-spacing: 3px; }
+  #hud-cash { color: #7dff8a; font-size: 22px; }
+  #hud-weapon { font-size: 16px; color: #eaf4ff; }
+  #hud-weapon2 { font-size: 12px; color: #9aa0aa; }
+  #hud-weapon3 { font-size: 12px; color: #9aa0aa; }
+  #hud-weapon4 { font-size: 12px; color: #9aa0aa; }
+  #hud-weapon5 { font-size: 12px; color: #9aa0aa; }
+  #hud-weapon6 { font-size: 12px; color: #9aa0aa; }
+  /* Autosave indicator: a brief green SAVED, top-centre under the
+     spotlight slot so it never covers the message toast or the stars. */
+  #hud-autosave { position: absolute; top: 140px; left: 50%; transform: translateX(-50%);
+    font-size: 12px; letter-spacing: 2px; color: #7dff8a; opacity: 0; transition: opacity .4s;
+    background: rgba(0,0,0,.55); padding: 2px 10px; border-radius: 4px; }
   #hud-pursuers { margin-top: 8px; font-size: 15px; line-height: 1.5; color: #ffb13e;
     background: rgba(0,0,0,.5); padding: 6px 10px; border-radius: 6px; display: none; }
   #hud-pursuers .hot { color: #ff5a4a; }
   /* Bottom-left: district label, minimap, health / armour / rep bars, packages. */
   #hud-mapwrap { position: absolute; bottom: 18px; left: 18px; }
-  #hud-district { font-size: 20px; letter-spacing: 1px; color: #ffd23e; margin-bottom: 6px;
+  #hud-district { font-size: 15px; letter-spacing: 1px; color: #ffd23e; margin-bottom: 6px;
     text-shadow: 0 2px 4px rgba(0,0,0,.9), 0 0 2px #000; font-weight: 700; }
   #minimap { width: 200px; height: 200px; border: 3px solid rgba(255,255,255,.85);
     border-radius: 50%; background: rgba(10,18,26,.85); display: block; }
@@ -69,32 +97,39 @@
   #hud-repfill { background: #c98ae0; }
   #hud-packages { margin-top: 6px; font-size: 15px; color: #ffd23e; letter-spacing: 1px;
     text-shadow: 0 2px 4px rgba(0,0,0,.9); font-weight: 700; }
-  /* Bottom-center dialogue bar: portrait + speaker + line. */
-  #hud-dialogue { bottom: 18px; left: 50%; transform: translateX(-50%); display: flex; gap: 12px;
-    align-items: center; background: rgba(0,0,0,.6); padding: 10px 16px; border-radius: 8px;
-    max-width: 620px; transition: opacity .4s; }
-  #hud-portrait { width: 48px; height: 48px; flex: none; border-radius: 50%; background: #2a7a8c;
+  /* Bottom-center dialogue bar: portrait + speaker + line. Smaller now
+     (v9 iteration 7) and clickable — click or any keypress dismisses it,
+     and the line stays in the quest panel log. */
+  #hud-dialogue { bottom: 18px; left: 50%; transform: translateX(-50%); display: flex; gap: 10px;
+    align-items: center; background: rgba(0,0,0,.6); padding: 8px 12px; border-radius: 8px;
+    max-width: 480px; transition: opacity .4s; pointer-events: auto; cursor: pointer; }
+  #hud-portrait { width: 36px; height: 36px; flex: none; border-radius: 50%; background: #2a7a8c;
     border: 2px solid #ffd23e; display: flex; align-items: center; justify-content: center;
-    font-size: 20px; }
-  #hud-speaker { color: #ffd23e; font-size: 15px; letter-spacing: 1px; }
-  #hud-dialogue-text { font-size: 18px; font-weight: 600; line-height: 1.35; }
+    font-size: 16px; }
+  #hud-speaker { color: #ffd23e; font-size: 13px; letter-spacing: 1px; }
+  #hud-dialogue-text { font-size: 15px; font-weight: 600; line-height: 1.35; }
   /* Bottom-right speedo: big speed, car + gear, condition, radio. */
   #hud-speedo { bottom: 18px; right: 18px; text-align: right; }
-  #hud-speed { font-size: 46px; }
+  #hud-speed { font-size: 38px; }
   #hud-speedunit { font-size: 20px; opacity: .85; }
   #hud-car { font-size: 18px; color: #ffd23e; }
   #hud-condition { font-size: 15px; font-weight: 600; }
   #hud-radio { font-size: 15px; opacity: .85; font-weight: 600; }
-  #hud-message { top: 170px; left: 50%; transform: translateX(-50%); width: 640px; max-width: 86vw;
-    text-align: center; font-size: 24px; line-height: 1.4; background: rgba(0,0,0,.6);
-    padding: 10px 16px; border-radius: 6px; transition: opacity .4s; opacity: 0; }
+  /* Transient message toast (v9 iteration 7): the old big centre banner
+     is gone — mission messages are a small toast at the top centre that
+     fades after a few seconds, never a persistent block of text. */
+  #hud-message { top: 14px; left: 50%; transform: translateX(-50%); width: max-content; max-width: 340px;
+    text-align: center; font-size: 15px; line-height: 1.4; background: rgba(0,0,0,.6);
+    padding: 6px 12px; border-radius: 6px; transition: opacity .4s; opacity: 0; }
   .overlay { position: fixed; inset: 0; display: flex; align-items: center; justify-content: safe center;
     flex-direction: column; z-index: 10; color: #fff; text-align: center; overflow-y: auto;
     background: linear-gradient(180deg, rgba(6,14,22,.25) 0%, rgba(6,14,22,.72) 100%); }
-  .overlay h1 { font-size: 84px; margin: 0; letter-spacing: 2px; color: #ffd23e;
+  /* v9 iteration 5 (§6): the title screen has its own editorial styles
+     (.cf-*) — the generic overlay type rules must not reach into it. */
+  .overlay:not(.cf-title-overlay) h1 { font-size: 84px; margin: 0; letter-spacing: 2px; color: #ffd23e;
     text-shadow: 0 4px 0 #b05a3a, 0 8px 24px rgba(0,0,0,.8); }
-  .overlay h2 { font-size: 30px; margin: 6px 0 14px; font-weight: 600; color: #eaf4ff; }
-  .overlay p { font-size: 20px; line-height: 1.5; max-width: 720px; margin: 8px 20px; color: #f2f6fa;
+  .overlay:not(.cf-title-overlay) h2 { font-size: 30px; margin: 6px 0 14px; font-weight: 600; color: #eaf4ff; }
+  .overlay:not(.cf-title-overlay) p { font-size: 20px; line-height: 1.5; max-width: 720px; margin: 8px 20px; color: #f2f6fa;
     text-shadow: 0 2px 6px rgba(0,0,0,.9); }
   .overlay .controls { font-size: 18px; background: rgba(0,0,0,.55); padding: 12px 18px;
     border-radius: 8px; margin: 12px 0; line-height: 1.7; }
@@ -103,7 +138,64 @@
     box-shadow: 0 4px 0 #b08a1e; }
   .btn:hover { background: #ffe27a; }
   .btn.secondary { background: #eaf4ff; box-shadow: 0 4px 0 #7a8a9a; }
-  #save-summary { font-size: 17px; color: #ffd23e; margin: 2px 0 6px; }
+  /* Title screen (v9 iteration 5, §6 — user title template, adapted to
+     our .overlay base: the overlay's column layout, centred text and
+     dark gradient are switched off here so the scrim is the only
+     darkening and the panel sits left). */
+  .cf-title-overlay { flex-direction: row; justify-content: flex-start; text-align: left;
+    background: transparent; padding: 0 clamp(28px, 6vw, 84px);
+    font-family: 'Inter', 'Segoe UI', system-ui, sans-serif; color: #f4f4f6; user-select: none; }
+  .cf-scrim { position: absolute; inset: 0;
+    background:
+      radial-gradient(circle at 75% 45%, rgba(255, 94, 126, 0.12), transparent 55%),
+      linear-gradient(90deg, rgba(10, 11, 18, 0.92) 0%, rgba(10, 11, 18, 0.76) 38%,
+        rgba(10, 11, 18, 0.22) 72%, rgba(10, 11, 18, 0.08) 100%);
+    pointer-events: none; }
+  .cf-hero-panel { position: relative; z-index: 1; max-width: 460px; display: flex;
+    flex-direction: column; gap: 18px; }
+  .cf-kicker { font-size: 11px; font-weight: 700; letter-spacing: 0.24em; color: #ff6b8b;
+    text-transform: uppercase; }
+  .cf-logo { margin: 0; font-size: clamp(44px, 6vw, 68px); font-weight: 900; line-height: 0.95;
+    letter-spacing: -0.02em; color: #ffffff; text-shadow: 0 8px 30px rgba(0, 0, 0, 0.65); }
+  .cf-logo span { display: block; background: linear-gradient(135deg, #ffd15c 0%, #ff7a45 100%);
+    -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
+  .cf-synopsis { margin: 0; font-size: 14.5px; line-height: 1.6; color: rgba(236, 238, 245, 0.84); }
+  .cf-save-pill { display: inline-flex; align-items: center; gap: 8px; width: fit-content;
+    padding: 6px 12px; border-radius: 4px; background: rgba(255, 255, 255, 0.06);
+    border: 1px solid rgba(255, 209, 92, 0.28); font-size: 11.5px; font-weight: 700;
+    letter-spacing: 0.08em; color: #ffd15c; }
+  .cf-dot { width: 6px; height: 6px; border-radius: 50%; background: #ffd15c;
+    box-shadow: 0 0 8px #ffd15c; flex: none; }
+  .cf-menu-actions { display: flex; flex-direction: column; gap: 10px; margin-top: 6px; max-width: 260px; }
+  .cf-btn { position: relative; padding: 13px 18px; border-radius: 4px; font-size: 13px;
+    font-weight: 800; letter-spacing: 0.14em; text-align: left; cursor: pointer;
+    transition: transform 0.16s ease, background 0.16s ease, border-color 0.16s ease;
+    font-family: inherit; margin: 0; box-shadow: none; }
+  .cf-btn:hover { transform: translateX(6px); }
+  .cf-btn:disabled { opacity: 0.38; cursor: not-allowed; transform: none; }
+  .cf-btn-primary { background: linear-gradient(135deg, #ffd15c 0%, #ff9d3b 100%); border: none;
+    color: #12131a; box-shadow: 0 6px 20px rgba(255, 166, 59, 0.3); }
+  .cf-btn-secondary { background: rgba(255, 255, 255, 0.09); border: 1px solid rgba(255, 255, 255, 0.22);
+    color: #ffffff; backdrop-filter: blur(8px); }
+  .cf-btn-secondary:hover { background: rgba(255, 255, 255, 0.16); border-color: #ffd15c; }
+  .cf-btn-ghost { background: transparent; border: 1px solid rgba(255, 255, 255, 0.14);
+    color: rgba(255, 255, 255, 0.72); }
+  .cf-btn-ghost:hover { color: #ffffff; border-color: rgba(255, 255, 255, 0.4); }
+  .cf-meta-hint { margin-top: 8px; font-size: 11px; letter-spacing: 0.1em; color: rgba(255, 255, 255, 0.45); }
+  /* Controls panel, shown over the title panorama (centred, above the scrim). */
+  #screen-title #screen-controls { position: absolute; left: 50%; top: 50%;
+    transform: translate(-50%, -50%); z-index: 2; }
+  /* Pause settings (v9 iteration 5, §5): preset + sliders + skill list. */
+  #pause-settings { background: rgba(0,0,0,.55); padding: 14px 22px; border-radius: 8px;
+    margin: 12px 0; width: 440px; max-width: 92vw; text-align: left; }
+  .pause-row { display: flex; align-items: center; gap: 10px; font-size: 16px; margin: 8px 0; }
+  .pause-row label { width: 140px; flex: none; color: #ffd23e; font-weight: 700; letter-spacing: 1px; }
+  .pause-row input[type=range] { flex: 1; min-width: 0; }
+  .pause-row select { flex: 1; font-size: 16px; padding: 4px; background: #10202e; color: #fff;
+    border: 1px solid #ffd23e; border-radius: 4px; }
+  .pause-row span { width: 48px; text-align: right; flex: none; }
+  #pause-skills { font-size: 16px; line-height: 1.7; background: rgba(0,0,0,.55);
+    padding: 10px 22px; border-radius: 8px; margin: 6px 0; text-align: left; width: 440px; max-width: 92vw; }
   #screen-controls { display: none; background: rgba(0,0,0,.55); padding: 14px 22px; border-radius: 8px;
     margin: 10px 0; font-size: 18px; line-height: 1.8; text-align: left; }
   /* JOB COMPLETE: the chapter list makes this the tallest overlay, so its
@@ -134,6 +226,14 @@
   #job-chapters .locked { color: #9aa0aa; }
   #screen-pause, #screen-over { display: none; }
   #over-title { color: #ff5a4a; }
+  /* Shop overlay (v9 iteration 4): Ammu-Nation / Pay 'n' Spray. */
+  #screen-shop { display: none; }
+  #shop-title { color: #ffd23e; }
+  #shop-items { font-size: 20px; line-height: 1.9; background: rgba(0,0,0,.55);
+    padding: 12px 26px; border-radius: 8px; margin: 8px 0; text-align: left; }
+  #shop-items .off { color: #9aa0aa; }
+  #shop-cash { font-size: 18px; color: #7dff8a; margin: 4px 0; }
+  #shop-hint { font-size: 16px; opacity: .85; margin: 6px 0 0; }
 </style>
 <script type="importmap">
 { "imports": { "three": "./vendor/three.module.min.js", "three/addons/": "./vendor/addons/" } }
@@ -146,22 +246,38 @@
 <div id="crosshair"></div>
 
 <div id="hud">
-  <div class="hud-box" id="hud-banner">
-    <span id="hud-chapter">CH.1 HOMECOMING</span>
-    <span id="hud-stage">STAGE 1/1</span>
-    <span id="hud-objective">Reach Marla's Garage on Coral Row</span>
-    <span id="hud-target-dist"></span>
-    <span id="hud-clock">DAY 1 · 18:24</span>
+  <div id="hud-quest">
+    <div id="hud-quest-head">
+      <span id="hud-quest-title">QUEST</span>
+      <span id="hud-chapter">CH.1 HOMECOMING</span>
+      <span id="hud-stage">STAGE 1/1</span>
+      <button id="hud-quest-toggle" type="button" aria-label="Minimize quest panel">—</button>
+    </div>
+    <div id="hud-quest-body">
+      <div id="hud-quest-line1">
+        <span id="hud-objective">Reach Marla's Garage on Coral Row</span>
+        <span id="hud-target-dist"></span>
+      </div>
+      <div id="hud-clock">DAY 1 · 18:24</div>
+      <div id="hud-stagebar"><div id="hud-stagebar-fill"></div></div>
+      <div id="hud-next"></div>
+      <div id="hud-quest-log"></div>
+      <div id="hud-quest-weapons">
+        <div id="hud-weapon2">2 · KNIFE ∞</div>
+        <div id="hud-weapon3">3 · BAZOOKA 8</div>
+        <div id="hud-weapon4">4 · SMG — LOCKED (REP 20)</div>
+        <div id="hud-weapon5">5 · SHOTGUN — LOCKED (REP 40)</div>
+        <div id="hud-weapon6">6 · RIFLE — LOCKED (REP 60)</div>
+      </div>
+    </div>
   </div>
-  <div id="hud-stagebar"><div id="hud-stagebar-fill"></div></div>
-  <div id="hud-next"></div>
+  <div id="hud-autosave"></div>
   <div id="hud-spotlight">◉ SPOTLIGHT ON YOU — BREAK LINE OF SIGHT</div>
   <div class="hud-box" id="hud-right">
     <div id="hud-mode">FREE ROAM</div>
     <div id="hud-stars">☆☆☆☆☆</div>
     <div id="hud-cash">$150</div>
-    <div id="hud-weapon">1 · PISTOL ∞</div>
-    <div id="hud-weapon2">2 · —</div>
+    <div id="hud-weapon">1 · PISTOL 24</div>
     <div id="hud-pursuers"></div>
   </div>
   <div class="hud-box" id="hud-message"></div>
@@ -172,6 +288,8 @@
     <div class="hud-bar"><div class="hud-bar-fill" id="hud-armourfill"></div><span class="hud-bar-text" id="hud-armourtext">⛨ 0</span></div>
     <div class="hud-bar"><div class="hud-bar-fill" id="hud-repfill"></div><span class="hud-bar-text" id="hud-reptext">REP 0</span></div>
     <div id="hud-packages">◆ PACKAGES 0/10</div>
+    <div id="hud-medals" style="margin-top: 4px; font-size: 15px; color: #ffd15c; letter-spacing: 1px; text-shadow: 0 2px 4px rgba(0,0,0,.9); font-weight: 700;">● MEDALS 0/24</div>
+    <div id="hud-skills" style="margin-top: 4px; font-size: 12px; color: #eaf4ff; letter-spacing: 1px; text-shadow: 0 2px 4px rgba(0,0,0,.9); font-weight: 700; white-space: pre-line; line-height: 1.5;"></div>
   </div>
   <div class="hud-box" id="hud-dialogue">
     <div id="hud-portrait">MQ</div>
@@ -185,25 +303,32 @@
   </div>
 </div>
 
-<div class="overlay" id="screen-title">
-  <h1>COSTA FUEGO</h1>
-  <h2>An open-world crime game</h2>
-  <p id="story-intro"></p>
-  <div>
-    <button class="btn" id="btn-start">New Game</button>
-    <button class="btn secondary" id="btn-continue">Continue</button>
-    <button class="btn secondary" id="btn-controls">Controls</button>
-  </div>
-  <p id="save-summary"></p>
+<div class="overlay cf-title-overlay" id="screen-title">
+  <div class="cf-scrim"></div>
+  <main class="cf-hero-panel">
+    <div class="cf-kicker">CORAL ROW · OPEN-WORLD CRIME</div>
+    <h1 class="cf-logo">COSTA <span>FUEGO</span></h1>
+    <p class="cf-synopsis">Three years inside. Costa Fuego forgot Rico Vane — Marla Quinn did not. Six jobs stand between Rico and a clean slate. The Reef Kings, the cops, and the bank are in the way.</p>
+    <div class="cf-save-pill" id="save-status">
+      <span class="cf-dot"></span>
+      <span id="save-status-text">CH.1 HOMECOMING · $0 · REP 0 · DAY 1</span>
+    </div>
+    <nav class="cf-menu-actions">
+      <button id="btn-new-game" class="cf-btn cf-btn-primary">NEW GAME</button>
+      <button id="btn-continue" class="cf-btn cf-btn-secondary">CONTINUE</button>
+      <button id="btn-controls" class="cf-btn cf-btn-ghost">CONTROLS</button>
+    </nav>
+    <footer class="cf-meta-hint">10 HIDDEN PACKAGES STASHED CITYWIDE · $50 EACH</footer>
+  </main>
   <div id="screen-controls">
     <b>CONTROLS</b><br>
-    WASD move / drive &nbsp;·&nbsp; Shift run / boost &nbsp;·&nbsp; E enter &amp; exit car<br>
-    Mouse drag camera &nbsp;·&nbsp; F or click shoot &nbsp;·&nbsp; Space brake<br>
-    M city map &nbsp;·&nbsp; Q radio &nbsp;·&nbsp; L neon night (dusk / night) &nbsp;·&nbsp; V spawn a car<br>
+    WASD move / drive &nbsp;·&nbsp; Shift run / boost &nbsp;·&nbsp; E enter &amp; exit car / shop<br>
+    Left click shoot (locks the mouse) &nbsp;·&nbsp; Right click aim &nbsp;·&nbsp; Mouse drag camera<br>
+    F shoot &nbsp;·&nbsp; Space jump (on foot) / handbrake-drift (in car) &nbsp;·&nbsp; S reverse<br>
+    1–6 switch weapon (pistol / knife / bazooka / SMG / shotgun / rifle)<br>
+    M city map &nbsp;·&nbsp; B radio (5 stations + off) &nbsp;·&nbsp; Q quest panel &nbsp;·&nbsp; L skip time +2 h &nbsp;·&nbsp; V spawn a car ($25)<br>
     P pause &nbsp;·&nbsp; N mute &nbsp;·&nbsp; R restart mission &nbsp;·&nbsp; Enter start game
   </div>
-  <p style="font-size:16px; opacity:.85">Six jobs for Marla Quinn. Steal cars, lose the cops, rob the bank — and get out clean.<br>
-  Ten hidden packages are stashed around the city, $50 each. The cops, the Reef Kings and the bank are just in the way.</p>
 </div>
 
 <div class="overlay" id="screen-pause">
@@ -211,9 +336,23 @@
   <p>Rico is waiting. The city is not.</p>
   <div>
     <button class="btn" id="btn-resume">Resume</button>
+    <button class="btn secondary" id="btn-save-game">Save Game</button>
     <button class="btn secondary" id="btn-restart-mission">Restart mission</button>
     <button class="btn secondary" id="btn-quit">Quit to title</button>
   </div>
+  <div id="pause-settings">
+    <div class="pause-row"><label for="sel-preset">GRAPHICS</label>
+      <select id="sel-preset"><option value="LOW">LOW</option><option value="MED" selected>MED</option><option value="HIGH">HIGH</option><option value="CUSTOM">CUSTOM</option></select></div>
+    <div class="pause-row"><label for="rng-traffic">Traffic</label><input type="range" id="rng-traffic" min="0" max="30" step="1" value="22"><span id="val-traffic">22</span></div>
+    <div class="pause-row"><label for="rng-crowd">Crowd</label><input type="range" id="rng-crowd" min="0" max="40" step="1" value="26"><span id="val-crowd">26</span></div>
+    <div class="pause-row"><label for="rng-view">View distance</label><input type="range" id="rng-view" min="300" max="1200" step="50" value="900"><span id="val-view">900</span></div>
+    <div class="pause-row"><label for="rng-mouse">Mouse sensitivity</label><input type="range" id="rng-mouse" min="0.5" max="2" step="0.1" value="1"><span id="val-mouse">1.0×</span></div>
+    <div class="pause-row"><label for="rng-master">Master volume</label><input type="range" id="rng-master" min="0" max="100" step="5" value="100"><span id="val-master">100</span></div>
+    <div class="pause-row"><label for="rng-music">Music</label><input type="range" id="rng-music" min="0" max="100" step="5" value="100"><span id="val-music">100</span></div>
+    <div class="pause-row"><label for="rng-effects">Effects</label><input type="range" id="rng-effects" min="0" max="100" step="5" value="100"><span id="val-effects">100</span></div>
+    <div class="pause-row"><label for="rng-engine">Engine</label><input type="range" id="rng-engine" min="0" max="100" step="5" value="100"><span id="val-engine">100</span></div>
+  </div>
+  <div id="pause-skills"></div>
 </div>
 
 <div class="overlay" id="screen-map">
@@ -221,6 +360,13 @@
   <div id="map-job"></div>
   <canvas id="bigmap" width="640" height="640"></canvas>
   <p id="map-hint">M or Esc to close &nbsp;·&nbsp; the gold line is your GPS route &nbsp;·&nbsp; leave the red circle to lose the cops</p>
+</div>
+
+<div class="overlay" id="screen-shop">
+  <h1 id="shop-title">AMMU-NATION</h1>
+  <div id="shop-items"></div>
+  <div id="shop-cash"></div>
+  <p id="shop-hint">Press 1–9 to buy &nbsp;·&nbsp; E or Esc to leave</p>
 </div>
 
 <div class="overlay" id="screen-job">

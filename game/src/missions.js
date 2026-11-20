@@ -53,8 +53,11 @@ export function currentMission(missions) {
 export function currentTarget(missions) {
   if (missions.index >= missions.targets.length) return null;
   // Mission 2 has two stages: steal the coupe, then deliver it.
+  // v9 iteration 7: the garage target is the landmark (it moved to
+  // (-112,112)) — never a hardcoded point, or the next garage move
+  // strands the delivery again.
   if (missions.index === 1 && missions.stage === 1) {
-    return { x: -112, z: 84, radius: 9 };
+    return missions.targets[3];
   }
   // Mission 6 has two stages: rob the bank, then reach the safehouse.
   if (missions.index === 5 && missions.stage === 1) {
@@ -141,6 +144,10 @@ export function startMission(missions, index, cfg) {
 export function missionObjectiveText(missions) {
   const def = currentMission(missions);
   if (!def) return 'All jobs done — Costa Fuego is yours.';
+  // v9 iteration 4: the REP gate. Mission 6 (The Big Score) needs REP
+  // 30 — while the gate holds, the objective says so instead of the
+  // bank robbery brief.
+  if (missions.repGate) return 'The Big Score needs REP 30 — run street races and stunts to earn it';
   if (missions.index === 1 && missions.stage === 1) return 'Deliver the orange coupe to the garage';
   if (missions.index === 5 && missions.stage === 1) return 'Escape to the safehouse';
   if (missions.index === 4) return `Take down the Reef Kings (${missions.enemiesLeft} left)`;
