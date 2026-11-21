@@ -1,21 +1,16 @@
-// The four screenshot scenes behind ?shot=<name>. Each one stages a real,
-// deterministic moment of the game — the same seed always gives the same
-// frame — and the game module does the staging; this file only names them
-// and the order they ship in, so shots.json and the dossier agree.
-//
-//   chase     — cover: driving a stolen car through traffic, wanted 3 stars,
-//               police in pursuit, minimap + mission objective on the HUD.
-//   combat    — on foot at the docks, firing at the Reef Kings: tracer,
-//               muzzle flash, enemies returning fire.
-//   map       — the full city map (M) over the game: districts, named
-//               venues, GPS route, search zone, current job.
-//   dialogue  — Homecoming briefing: Marla's dialogue bar with her
-//               portrait, the garage beacon and the player at the spawn.
-export const SHOT_NAMES = ['chase', 'combat', 'map', 'dialogue'];
+// shots.js — the staged screenshot scenes behind ?shot=name&seed=n.
+// Each scene sets the real game into a representative state (a police
+// chase, a gang fight, the city map, a mission dialogue) and the renderer
+// paints it; game.frame raises window.__shotReady once the scene settles.
 
-export const SHOT_FILES = [
-  { name: '1-chase.jpg', query: '?shot=chase&seed=1' },
-  { name: '2-combat.jpg', query: '?shot=combat&seed=1' },
-  { name: '3-map.jpg', query: '?shot=map&seed=1' },
-  { name: '4-dialogue.jpg', query: '?shot=dialogue&seed=1' },
-];
+export const SHOT_NAMES = ['chase', 'combat', 'map', 'dialogue', 'start', 'play', 'end'];
+
+export const SHOT_DESCRIPTIONS = {
+  chase: 'Player fleeing police at three stars through downtown, full HUD',
+  combat: 'On-foot gunfight with the Reef Kings at Neon Plaza at night',
+  map: 'Fullscreen city map with districts, venues and the GPS route',
+  dialogue: 'Mission dialogue with Marla outside her garage',
+  start: 'Opening spawn looking north toward the garage',
+  play: 'Free-roam driving through Tower Plaza',
+  end: 'Fuego Island at golden hour',
+};

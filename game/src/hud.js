@@ -1,819 +1,349 @@
-// The HUD: a small minimizable quest panel top-left (chapter, objective,
-// distance, clock, stage bar, next job, dialogue log, weapon list), mode
-// + wanted stars + cash + current weapon + the pursuer panel top-right,
-// district name + live minimap + health / armour / rep bars + package
-// count bottom-left, big speedo with car name, gear, vehicle condition
-// and radio bottom-right, and a mission dialogue bar (portrait + speaker
-// + line) bottom-center that dismisses on keypress/click. Big,
-// high-contrast text so it stays readable when a screenshot is shrunk.
-//
-// v9 iteration 7: the old top-centre mission banner and the big centre
-// message banner are gone — the objective lives in the quest panel, and
-// mission messages are a small transient toast. Nothing is deleted, only
-// tucked away: the full objective, NEXT job, dialogue log and weapon
-// list are all inside the panel (scrollable), and the dialogue box keeps
-// every line in the panel log when it dismisses.
-// v6: the banner carried a stage-progress bar and a NEXT line (the job
-// after this one), the clock shows the day as well as the time, the
-// top-right grows a pursuer panel (name, distance, status per chaser) and
-// a second weapon slot, the bottom-left grows armour and reputation bars
-// and a package counter, the speedo shows the car's condition, and the
-// helicopter's spotlight gets its own flashing banner when it is on you.
-// The minimap and the full city map share one base, so they can never
-// drift apart.
-import { DISTRICTS } from './config.js';
+// hud.js — every DOM overlay for Costa Fuego: the in-game HUD, minimap,
+// fullscreen city map, quest panel, dialogue box and the menu screens.
+// game.js owns the state; this module only paints it.
 
-export function createHud() {
-  const root = document.getElementById('hud');
-  const chapterEl = document.getElementById('hud-chapter');
-  const stageEl = document.getElementById('hud-stage');
-  const objectiveEl = document.getElementById('hud-objective');
-  const distEl = document.getElementById('hud-target-dist');
-  const clockEl = document.getElementById('hud-clock');
-  const progressEl = document.getElementById('hud-stagebar-fill');
-  const nextEl = document.getElementById('hud-next');
-  const modeEl = document.getElementById('hud-mode');
-  const starsEl = document.getElementById('hud-stars');
-  const cashEl = document.getElementById('hud-cash');
-  const weaponEl = document.getElementById('hud-weapon');
-  const weapon2El = document.getElementById('hud-weapon2');
-  const weapon3El = document.getElementById('hud-weapon3');
-  const weapon4El = document.getElementById('hud-weapon4');
-  const weapon5El = document.getElementById('hud-weapon5');
-  const weapon6El = document.getElementById('hud-weapon6');
-  const autosaveEl = document.getElementById('hud-autosave');
-  const pursuersEl = document.getElementById('hud-pursuers');
-  const districtEl = document.getElementById('hud-district-name');
-  const healthFill = document.getElementById('hud-healthfill');
-  const healthText = document.getElementById('hud-healthtext');
-  const armourFill = document.getElementById('hud-armourfill');
-  const armourText = document.getElementById('hud-armourtext');
-  const repFill = document.getElementById('hud-repfill');
-  const repText = document.getElementById('hud-reptext');
-  const packagesEl = document.getElementById('hud-packages');
-  const medalsEl = document.getElementById('hud-medals');
-  const skillsEl = document.getElementById('hud-skills');
-  const speedEl = document.getElementById('hud-speed');
-  const carEl = document.getElementById('hud-car');
-  const conditionEl = document.getElementById('hud-condition');
-  const radioEl = document.getElementById('hud-radio');
-  const messageEl = document.getElementById('hud-message');
-  const dialogueEl = document.getElementById('hud-dialogue');
-  const portraitEl = document.getElementById('hud-portrait');
-  const speakerEl = document.getElementById('hud-speaker');
-  const dialogueTextEl = document.getElementById('hud-dialogue-text');
-  const spotlightEl = document.getElementById('hud-spotlight');
-  const crosshairEl = document.getElementById('crosshair');
-  // v9 iteration 7: the quest panel (top-left) — the objective's new home.
-  const questEl = document.getElementById('hud-quest');
-  const questBodyEl = document.getElementById('hud-quest-body');
-  const questToggleEl = document.getElementById('hud-quest-toggle');
-  const questLogEl = document.getElementById('hud-quest-log');
-  const minimap = document.getElementById('minimap');
-  const mapCtx = minimap.getContext('2d');
-  const bigmap = document.getElementById('bigmap');
-  const bigCtx = bigmap ? bigmap.getContext('2d') : null;
-  // v9 iteration 4: DPR calibration. The canvases are backed at
-  // devicePixelRatio (capped at 2) so the minimap and the big map stay
-  // sharp on hidpi screens; the CSS display sizes stay 200 and 640, and
-  // the draw code works in those logical sizes with a dpr transform.
-  const dpr = Math.min(window.devicePixelRatio || 1, 2);
-  minimap.width = 200 * dpr;
-  minimap.height = 200 * dpr;
-  if (bigmap) {
-    bigmap.width = 640 * dpr;
-    bigmap.height = 640 * dpr;
-  }
-  let messageTimer = 0;
-  let autosaveTimer = 0;
+import { cfg, AVENUES, STREETS, DISTRICTS, LANDMARKS, SHOPS, REP_RANKS, repRank, WEAPONS, weekdayOf } from './config.js';
 
-  // v9 iteration 7 — quest panel collapse: the collapsed state persists
-  // across the session (localStorage), Q toggles it, the — button
-  // collapses it, and clicking the collapsed chip re-opens it.
-  const QUEST_COLLAPSED_KEY = 'costa-fuego.quest-collapsed';
-  let questCollapsed = false;
-  try {
-    questCollapsed = window.localStorage.getItem(QUEST_COLLAPSED_KEY) === '1';
-  } catch { /* private mode: the panel just defaults to expanded */ }
-  function applyQuestCollapsed() {
-    if (!questEl) return;
-    questEl.classList.toggle('collapsed', questCollapsed);
-    if (questToggleEl) questToggleEl.textContent = questCollapsed ? '+' : '—';
-  }
-  function setQuestCollapsed(collapsed) {
-    questCollapsed = !!collapsed;
-    try {
-      window.localStorage.setItem(QUEST_COLLAPSED_KEY, questCollapsed ? '1' : '0');
-    } catch { /* private mode: in-memory only */ }
-    applyQuestCollapsed();
-  }
-  function toggleQuest() {
-    setQuestCollapsed(!questCollapsed);
-  }
-  function isQuestCollapsed() {
-    return questCollapsed;
-  }
-  if (questToggleEl) questToggleEl.addEventListener('click', () => toggleQuest());
-  if (questEl) {
-    questEl.addEventListener('click', (event) => {
-      // Clicking the collapsed chip re-opens it — but the — / + button
-      // already toggles, so a button click must not fire twice for one
-      // click (that would collapse-then-reopen and look dead).
-      if (questCollapsed && event.target !== questToggleEl) toggleQuest();
-    });
-  }
-  applyQuestCollapsed();
+function el(id) { return document.getElementById(id); }
 
-  // v9 iteration 7 — dialogue log: every conversation line (and every
-  // speaker-prefixed mission message) is kept here, newest last, so a
-  // dismissed dialogue box never loses the story. Cap 8 lines.
-  function logQuestLine(speaker, text) {
-    if (!questLogEl || !text) return;
-    const row = document.createElement('div');
-    if (speaker) {
-      const b = document.createElement('b');
-      b.textContent = `${speaker}: `;
-      row.appendChild(b);
+const MAP = { scale: 0.98, ox: 180, oy: 155 };
+const MAP_COLORS = { grass: '#3a6a3a', sea: '#1c4a6b', road: '#5a6068', sand: '#e8d29a', land: '#8fae7a' };
+
+export class Hud {
+  constructor() {
+    this.questCollapsed = false;
+    this.toastTimer = 0;
+    this.bannerTimer = 0;
+    this.dialogueQueue = [];
+    this.dialogueOpen = false;
+    this.dialogueTimer = 0;
+    this.questLogLines = [];
+    this.minimap = el('minimap');
+    this.minictx = this.minimap ? this.minimap.getContext('2d') : null;
+    this.bigmap = el('bigmap');
+    this.bigctx = this.bigmap ? this.bigmap.getContext('2d') : null;
+    this.mapOpen = false;
+    const toggle = el('hud-quest-toggle');
+    if (toggle) toggle.addEventListener('click', () => this.toggleQuest());
+  }
+
+  toggleQuest() {
+    this.questCollapsed = !this.questCollapsed;
+    const panel = el('hud-quest');
+    const toggle = el('hud-quest-toggle');
+    if (panel) panel.classList.toggle('collapsed', this.questCollapsed);
+    if (toggle) toggle.textContent = this.questCollapsed ? '+' : '—';
+  }
+
+  toast(text, seconds = 3.5) {
+    const m = el('hud-message');
+    if (!m) return;
+    m.textContent = text;
+    m.style.opacity = '1';
+    this.toastTimer = seconds;
+  }
+
+  banner(text, seconds = 3) {
+    const b = el('hud-bigbanner');
+    if (!b) return;
+    b.textContent = text;
+    b.style.opacity = '1';
+    this.bannerTimer = seconds;
+  }
+
+  showDialogue(lines) {
+    this.dialogueQueue = lines.slice();
+    this.dialogueOpen = this.dialogueQueue.length > 0;
+    this.dialogueTimer = 4.5;
+    for (const line of lines) this.questLogLines.push(line.who + ': ' + line.line);
+    this.paintDialogue();
+    this.paintQuestLog();
+  }
+
+  advanceDialogue() {
+    if (!this.dialogueOpen) return false;
+    this.dialogueQueue.shift();
+    this.dialogueOpen = this.dialogueQueue.length > 0;
+    this.dialogueTimer = 4.5;
+    this.paintDialogue();
+    return true;
+  }
+
+  paintDialogue() {
+    const box = el('hud-dialogue');
+    const speaker = el('hud-speaker');
+    const text = el('hud-dialogue-text');
+    if (!box) return;
+    if (!this.dialogueOpen) { box.style.opacity = '0'; return; }
+    const line = this.dialogueQueue[0];
+    if (speaker) speaker.textContent = line.who;
+    if (text) text.textContent = line.line;
+    box.style.opacity = '1';
+  }
+
+  paintQuestLog() {
+    const log = el('hud-quest-log');
+    if (log) log.textContent = this.questLogLines.slice(-4).join('  ·  ');
+  }
+
+  showScreen(id) {
+    for (const s of ['screen-title', 'screen-job', 'screen-over', 'screen-pause', 'screen-controls', 'screen-shop', 'screen-map']) {
+      const node = el(s);
+      if (node) node.style.display = s === id ? 'flex' : 'none';
     }
-    row.appendChild(document.createTextNode(text));
-    questLogEl.appendChild(row);
-    while (questLogEl.children.length > 8) questLogEl.removeChild(questLogEl.firstChild);
-    if (questBodyEl) questBodyEl.scrollTop = questBodyEl.scrollHeight;
+    const hud = el('hud');
+    if (hud) hud.style.display = id ? 'none' : 'block';
   }
 
-  // v9 iteration 7 — dialogue dismiss: a fresh keypress or a click on
-  // the box hides it (the line stays in the quest log); a NEW line
-  // re-shows it once. After the conversation ends, the last line lingers
-  // 3 game-seconds, then fades.
-  let lastDialogueKey = null;
-  let dialogueDismissed = false;
-  let dialogueGoneFor = 0;
-  window.addEventListener('keydown', (event) => {
-    if (event.repeat) return;
-    dialogueDismissed = true;
-  });
+  hideScreens() { this.showScreen(null); }
 
-  // "DAY 1 · 18:24" for the HUD clock and for time-skip messages — one
-  // formatter, so the two can never drift apart.
-  function clockText(hour, day) {
-    const h = Math.floor(hour);
-    const m = Math.floor((hour - h) * 60);
-    return `DAY ${day || 1} · ${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
+  setSaveStatus(text) {
+    const s = el('save-status-text');
+    if (s) s.textContent = text;
   }
 
-  // Autosave indicator (v9 iteration 4): a brief "SAVED" under the
-  // clock after every autosave, so the player sees the save land.
-  function showAutosave(text) {
-    if (!autosaveEl) return;
-    autosaveEl.textContent = text;
-    autosaveEl.style.opacity = '1';
-    autosaveTimer = 2;
-  }
-
-  function showMessage(text, seconds) {
-    messageEl.textContent = text;
-    messageEl.style.opacity = '1';
-    messageTimer = seconds || 5;
-    // Speaker-prefixed mission messages ("Marla Quinn: ...") are
-    // dialogue too — they go in the quest log so the story survives the
-    // dismiss. Plain toasts (radio, errors) do not.
-    if (text && text.includes(':')) {
-      const i = text.indexOf(':');
-      logQuestLine(text.slice(0, i), text.slice(i + 1).trim());
+  update(dt, state) {
+    if (this.toastTimer > 0) {
+      this.toastTimer -= dt;
+      if (this.toastTimer <= 0) { const m = el('hud-message'); if (m) m.style.opacity = '0'; }
     }
-  }
-
-  function barColor(v) {
-    return v < 30 ? '#ff5a4a' : v < 60 ? '#ffb13e' : '#58d85a';
-  }
-
-  function update(state) {
-    // Quest panel: chapter chip, stage, objective, target distance,
-    // day + clock, stage progress bar, next job.
-    chapterEl.textContent = state.chapter || '';
-    if (stageEl) stageEl.textContent = state.stage || '';
-    objectiveEl.textContent = state.objective;
-    distEl.textContent = state.targetDist != null ? `${Math.round(state.targetDist)} m` : '';
-    const season = state.season ? ` · ${state.season}` : '';
-    // v9 iteration 5 (§5): the weekday leads the clock ("FRI · DAY 1 · 18:24").
-    const weekday = state.weekday ? `${state.weekday} · ` : '';
-    clockEl.textContent = `${weekday}${clockText(state.clockHour, state.day)}${season}`;
-    if (progressEl) progressEl.style.width = `${Math.round((state.progress || 0) * 100)}%`;
-    if (nextEl) {
-      nextEl.textContent = state.nextMission ? `NEXT: ${state.nextMission}` : '';
-      nextEl.style.display = state.nextMission ? 'block' : 'none';
+    if (this.bannerTimer > 0) {
+      this.bannerTimer -= dt;
+      if (this.bannerTimer <= 0) { const b = el('hud-bigbanner'); if (b) b.style.opacity = '0'; }
     }
-
-    // Top-right: heat label, wanted stars, cash, weapon slots, pursuers.
-    if (state.stars <= 0) modeEl.textContent = 'FREE ROAM';
-    else if (state.stars <= 2) modeEl.textContent = `${state.stars}★ HEAT RISING`;
-    else if (state.stars <= 4) modeEl.textContent = `${state.stars}★ MANHUNT`;
-    else modeEl.textContent = '5★ MAXIMUM HEAT';
-    modeEl.style.color = state.stars > 0 ? '#ffb13e' : '#7dff8a';
-    let stars = '';
-    for (let i = 0; i < 5; i += 1) stars += i < state.stars ? '★' : '☆';
-    starsEl.textContent = stars;
-    starsEl.style.color = state.stars > 0 ? '#ffd23e' : '#9aa0aa';
-    cashEl.textContent = `$${Math.round(state.cash).toLocaleString('en-US')}`;
-    // Weapon slots (v9 iteration 4): the pistol is limited ammo now
-    // (bought at Ammu-Nation), the knife never runs dry, the bazooka is
-    // limited rockets, and slots 4-6 are the shop weapons — their ammo
-    // when owned, the REP lock when not. The active slot carries the ◄
-    // marker so the player always knows what is in hand.
-    const w = state.weapon || 0;
-    const rockets = state.rockets != null ? state.rockets : 8;
-    const owned = state.owned || {};
-    weaponEl.textContent = `1 · PISTOL ${state.ammo != null ? state.ammo : 24}${w === 0 ? ' ◄' : ''}`;
-    if (weapon2El) weapon2El.textContent = `2 · KNIFE ∞${w === 1 ? ' ◄' : ''}`;
-    if (weapon3El) weapon3El.textContent = `3 · BAZOOKA ${rockets}${w === 2 ? ' ◄' : ''}`;
-    if (weapon4El) weapon4El.textContent = owned.smg ? `4 · SMG ${state.smgAmmo != null ? state.smgAmmo : 0}${w === 3 ? ' ◄' : ''}` : '4 · SMG — LOCKED (REP 20)';
-    if (weapon5El) weapon5El.textContent = owned.shotgun ? `5 · SHOTGUN ${state.shotgunAmmo != null ? state.shotgunAmmo : 0}${w === 4 ? ' ◄' : ''}` : '5 · SHOTGUN — LOCKED (REP 40)';
-    if (weapon6El) weapon6El.textContent = owned.rifle ? `6 · RIFLE ${state.rifleAmmo != null ? state.rifleAmmo : 0}${w === 5 ? ' ◄' : ''}` : '6 · RIFLE — LOCKED (REP 60)';
-    if (pursuersEl) {
-      const list = state.pursuers || [];
-      if (list.length > 0) {
-        pursuersEl.innerHTML = list.map((p) => {
-          const d = p.kind === 'heli' ? '' : ` · ${p.dist}m`;
-          const hot = p.status === 'RAMMING' || p.status === 'SPOTLIGHT ON YOU' || p.status === 'ARRESTING';
-          return `<div class="${hot ? 'hot' : ''}">${p.name}${d} — ${p.status}</div>`;
-        }).join('');
-        pursuersEl.style.display = 'block';
-      } else {
-        pursuersEl.style.display = 'none';
-      }
+    if (this.dialogueOpen) {
+      this.dialogueTimer -= dt;
+      if (this.dialogueTimer <= 0) this.advanceDialogue();
     }
-
-    // Bottom-left: district over the minimap, health / armour / rep bars
-    // under it, package count below that. v9 iteration 5 (§3/§5): the
-    // street underfoot leads the district ("Fuego Ave · DOWNTOWN"),
-    // the REP bar fills toward the NEXT rank, the rank name shows, and
-    // the medals + skill levels get their own lines.
-    districtEl.textContent = state.street ? `${state.street} · ${state.district || ''}` : (state.district || '');
-    const hp = Math.max(0, Math.round(state.health));
-    healthFill.style.width = `${hp}%`;
-    healthFill.style.background = barColor(hp);
-    healthText.textContent = `♥ ${hp}`;
-    const ar = Math.max(0, Math.round(state.armour || 0));
-    if (armourFill) {
-      armourFill.style.width = `${ar}%`;
-      armourFill.style.background = ar > 0 ? '#7fb3d8' : '#3a4550';
+    const p = state.player;
+    const cash = el('hud-cash');
+    if (cash) cash.textContent = '$' + Math.floor(p.cash);
+    const stars = el('hud-stars');
+    if (stars) stars.textContent = '★'.repeat(state.wanted.stars) + '☆'.repeat(5 - state.wanted.stars);
+    const health = el('hud-healthtext');
+    if (health) health.textContent = 'HP ' + Math.max(0, Math.ceil(p.health));
+    const hfill = el('hud-healthfill');
+    if (hfill) hfill.style.width = Math.max(0, p.health) + '%';
+    const clock = el('hud-clock');
+    if (clock) {
+      const h = Math.floor(state.hour) % 24;
+      const m = Math.floor((state.hour % 1) * 60);
+      clock.textContent = weekdayOf(state.day) + ' · DAY ' + state.day + ' · ' +
+        String(h).padStart(2, '0') + ':' + String(m).padStart(2, '0');
     }
-    if (armourText) armourText.textContent = `⛨ ${ar}`;
-    const rep = Math.max(0, Math.round(state.rep || 0));
+    const district = el('hud-district-name');
+    if (district) district.textContent = state.streetLabel;
+    const speed = el('hud-speed');
+    if (speed) speed.textContent = state.inCar ? Math.abs(Math.round(state.carSpeed * 3.6)) + ' km/h' : '';
+    const carName = el('hud-car');
+    if (carName) carName.textContent = state.inCar ? state.carName : 'ON FOOT';
+    const weapon = el('hud-weapon');
+    if (weapon) weapon.textContent = state.weaponText;
+    for (let i = 2; i <= 4; i++) {
+      const wEl = el('hud-weapon' + i);
+      if (wEl) wEl.textContent = state.weaponSlots[i - 1] || '';
+    }
+    const repText = el('hud-reptext');
+    if (repText) repText.textContent = 'REP ' + state.rep + ' · ' + repRank(state.rep).name;
+    const repFill = el('hud-repfill');
     if (repFill) {
-      repFill.style.width = `${Math.round((state.repProgress ?? 0) * 100)}%`;
-      repFill.style.background = '#c98ae0';
+      const rank = repRank(state.rep);
+      const next = REP_RANKS[REP_RANKS.indexOf(rank) + 1];
+      const pct = next ? Math.min(100, ((state.rep - rank.rep) / (next.rep - rank.rep)) * 100) : 100;
+      repFill.style.width = pct + '%';
     }
-    if (repText) repText.textContent = state.repRank ? `REP ${rep} · ${state.repRank}` : `REP ${rep}`;
-    if (packagesEl) {
-      packagesEl.textContent = `◆ PACKAGES ${state.packages || 0}/${state.packagesTotal || 10}`;
-    }
-    if (medalsEl) {
-      medalsEl.textContent = `● MEDALS ${state.medals || 0}/${state.medalsTotal || 24}`;
-    }
-    if (skillsEl && state.skills) {
-      const s = state.skills;
-      // v9 iteration 6: six stats on one line clipped past the 200 px
-      // minimap column. Two lines of three, with the <br> rendered by
-      // the pre-line style on #hud-skills (see index.html).
-      skillsEl.textContent = `DRV ${s.driving} · STA ${s.stamina} · AIM ${s.aim}\nSTL ${s.stealth} · INF ${s.influence} · STR ${s.street}`;
-    }
-
-    // Bottom-right speedo: big speed, car name + gear, vehicle condition,
-    // radio station.
-    if (state.inCar) {
-      speedEl.textContent = String(Math.round(state.speed * 3.6));
-      carEl.textContent = state.carName ? `${state.carName} • ${state.gear}` : 'ON FOOT';
-      if (conditionEl) {
-        const cond = Math.max(0, Math.round(state.condition ?? 100));
-        conditionEl.textContent = `CONDITION ${cond}%`;
-        conditionEl.style.color = cond < 30 ? '#ff5a4a' : cond < 60 ? '#ffb13e' : '#7dff8a';
-      }
-    } else {
-      speedEl.textContent = '0';
-      carEl.textContent = 'ON FOOT';
-      if (conditionEl) conditionEl.textContent = '';
-    }
-    if (radioEl && state.radio) radioEl.textContent = `♪ ${state.radio}`;
-
-    // Bottom-center dialogue: portrait initials + speaker + current line.
-    // v9 iteration 7: smaller, and it gets out of the way — a new line
-    // logs to the quest panel and re-shows the box once; a keypress or
-    // click dismisses it (the log keeps the line); after the conversation
-    // ends the last line lingers 3 game-seconds, then fades.
-    if (state.dialogueText) {
-      const key = `${state.dialogueSpeaker || ''}\n${state.dialogueText}`;
-      if (key !== lastDialogueKey) {
-        lastDialogueKey = key;
-        dialogueDismissed = false;
-        dialogueGoneFor = 0;
-        logQuestLine(state.dialogueSpeaker || '', state.dialogueText);
-      }
-      const initials = (state.dialogueSpeaker || 'M Q')
-        .split(/\s+/)
-        .map((w) => w[0])
-        .join('')
-        .slice(0, 2);
-      portraitEl.textContent = initials;
-      speakerEl.textContent = state.dialogueSpeaker || '';
-      dialogueTextEl.textContent = state.dialogueText;
-      dialogueEl.style.opacity = dialogueDismissed ? '0' : '1';
-    } else {
-      // No live line: linger the last one 3 game-seconds, then fade.
-      // (Never shown anything yet: stay hidden.)
-      if (lastDialogueKey) dialogueGoneFor += state.dt || 0;
-      dialogueEl.style.opacity = (lastDialogueKey && dialogueGoneFor <= 3 && !dialogueDismissed) ? '1' : '0';
-    }
-
-    // Spotlight banner: the heli has its beam on you — break line of
-    // sight, because the heat will not cool while it does. v9 iteration
-    // 4: standing in a police vision cone shows the same banner.
-    if (spotlightEl) {
-      spotlightEl.style.display = state.spotlight || state.inVisionCone ? 'block' : 'none';
-    }
-
-    // Crosshair on foot: the player aims with the mouse, so the aim point
-    // is always visible. v9 iteration 4: it also shows in a car while
-    // the player is aiming (drive-by).
-    if (crosshairEl) crosshairEl.style.display = state.crosshair ? 'block' : 'none';
-
-    if (messageTimer > 0) {
-      messageTimer -= state.dt;
-      if (messageTimer <= 0) messageEl.style.opacity = '0';
-    }
-    if (!messageEl.textContent.trim()) messageEl.style.opacity = '0';
-    // Autosave indicator fades 2 s after the save lands.
-    if (autosaveTimer > 0) {
-      autosaveTimer -= state.dt;
-      if (autosaveTimer <= 0 && autosaveEl) autosaveEl.style.opacity = '0';
-    }
-    root.style.display = state.visible ? 'block' : 'none';
+    const skills = el('hud-skills');
+    if (skills) skills.textContent = 'DRV ' + state.skills.driving + ' · STR ' + state.skills.street;
+    const medals = el('hud-medals');
+    if (medals) medals.textContent = '🏅 ' + state.medalsEarned + '/' + state.medalsTotal;
+    const chapter = el('hud-chapter');
+    if (chapter) chapter.textContent = state.chapter;
+    const next = el('hud-next');
+    if (next) next.textContent = state.nextChapter;
+    const objective = el('hud-objective');
+    if (objective) objective.textContent = state.objective;
+    const targetDist = el('hud-target-dist');
+    if (targetDist) targetDist.textContent = state.targetDist === null ? '' : Math.round(state.targetDist) + ' m';
+    const cross = el('crosshair');
+    if (cross) cross.style.display = state.inCar ? 'none' : 'block';
+    const radio = el('hud-radio');
+    if (radio) radio.textContent = state.radioName;
+    const spot = el('hud-spotlight');
+    if (spot) spot.style.display = state.spotlight ? 'block' : 'none';
+    this.paintMinimap(state);
+    if (this.mapOpen) this.paintBigMap(state);
   }
 
-  // The shared map base: sea, sand, roads, blocks, parks, landmarks. Both
-  // the minimap and the full city map draw from it, so they can never drift.
-  // `half` is the map's half-range in metres: the minimap covers ±190
-  // (reaches the sea), the big map ±300 (reaches Fuego Island).
-  function drawMapBase(ctx, size, world, half) {
-    const toMap = (x, z) => [((x + half) / (half * 2)) * size, ((z + half) / (half * 2)) * size];
-    ctx.fillStyle = 'rgba(10, 18, 26, 0.92)';
-    ctx.fillRect(0, 0, size, size);
-    // Sea east of the beach (x > 172) and the sand strip (x 142–172),
-    // positioned in world coords so the shoreline never drifts when the
-    // map range grows.
-    const [seaX] = toMap(172, 0);
-    ctx.fillStyle = '#1c4a6b';
-    ctx.fillRect(Math.max(0, seaX), 0, size - Math.max(0, seaX), size);
-    const [sandX] = toMap(142, 0);
-    ctx.fillStyle = '#e6d3a3';
-    ctx.fillRect(Math.max(0, sandX), 0, Math.max(0, seaX - sandX), size);
-    // Fuego Pier (x 168–209, z 98–102) + causeway (x 209–222) as one
-    // sand-coloured line, and Fuego Island (x 222–272, z 72–128) as a
-    // grass island with a sand rim. On the minimap the island is
-    // off-canvas and the canvas clips it; the big map shows it whole.
-    const [pier0x, pierZ] = toMap(168, 100);
-    const [pier1x] = toMap(222, 100);
-    ctx.strokeStyle = '#d8c9a0';
-    ctx.lineWidth = Math.max(2, size / 160);
-    ctx.beginPath();
-    ctx.moveTo(pier0x, pierZ);
-    ctx.lineTo(pier1x, pierZ);
-    ctx.stroke();
-    const [isl0x, isl0z] = toMap(222, 72);
-    const [isl1x, isl1z] = toMap(272, 128);
-    ctx.fillStyle = '#3a6a3a';
-    ctx.fillRect(isl0x, isl0z, isl1x - isl0x, isl1z - isl0z);
-    ctx.strokeStyle = '#e6d3a3';
-    ctx.lineWidth = 2;
-    ctx.strokeRect(isl0x, isl0z, isl1x - isl0x, isl1z - isl0z);
-    // Parks read green on the map, so the player can find them.
-    ctx.fillStyle = '#3a6a3a';
-    for (const [px, pz] of [[-112, -112], [56, 112]]) {
-      const [mx, mz] = toMap(px - 21, pz - 21);
-      const [mx2, mz2] = toMap(px + 21, pz + 21);
-      ctx.fillRect(mx, mz, mx2 - mx, mz2 - mz);
-    }
-    ctx.strokeStyle = '#5a6068';
-    ctx.lineWidth = Math.max(3, size / 40);
-    for (const c of world.roadLines) {
-      const [mx] = toMap(c, 0);
-      const [, mz] = toMap(0, c);
-      ctx.beginPath();
-      ctx.moveTo(mx, 0);
-      ctx.lineTo(mx, size);
-      ctx.stroke();
-      ctx.beginPath();
-      ctx.moveTo(0, mz);
-      ctx.lineTo(size, mz);
-      ctx.stroke();
-    }
-    return toMap;
+  worldToMap(x, z, w, h) {
+    const wx = cfg.world;
+    const px = ((x - wx.minX) / (wx.maxX - wx.minX)) * w;
+    const pz = ((z - wx.minZ) / (wx.maxZ - wx.minZ)) * h;
+    return [px, pz];
   }
 
-  function drawGpsRoute(ctx, toMap, world) {
-    if (!world.gpsRoute || world.gpsRoute.length < 2) return;
-    ctx.strokeStyle = '#ffd23e';
-    ctx.lineWidth = 4;
-    ctx.setLineDash([10, 6]);
-    ctx.beginPath();
-    world.gpsRoute.forEach((pt, i) => {
-      const [mx, mz] = toMap(pt.x, pt.z);
-      if (i === 0) ctx.moveTo(mx, mz);
-      else ctx.lineTo(mx, mz);
-    });
-    ctx.stroke();
-    ctx.setLineDash([]);
+  bigToMap(x, z) {
+    return [MAP.ox + (x + 150) * MAP.scale, MAP.oy + (z + 150) * MAP.scale];
   }
 
-  // Police vision cones (v9 iteration 4): a translucent triangle 20 m
-  // ahead of each cruiser, widening to 6 m at the far end — the same
-  // geometry the 3D cones use, so the map and the world agree.
-  function drawVisionCones(ctx, toMap, world, size, half) {
-    const scale = size / (half * 2);
-    for (const car of world.policeCars || []) {
-      const [mx, mz] = toMap(car.group.position.x, car.group.position.z);
-      ctx.save();
-      ctx.translate(mx, mz);
-      ctx.rotate(car.heading);
-      ctx.fillStyle = 'rgba(255, 210, 62, 0.18)';
-      ctx.beginPath();
-      ctx.moveTo(0, 0);
-      ctx.lineTo(-6 * scale, 20 * scale);
-      ctx.lineTo(6 * scale, 20 * scale);
-      ctx.closePath();
-      ctx.fill();
-      ctx.restore();
-    }
-  }
-
-  // Shops (v9 iteration 4): diamonds — lime for Ammu-Nation, magenta
-  // for Pay 'n' Spray. The big map labels them too. v9 iteration 5: the
-  // spray label hangs BELOW its marker — on the old right-hand side it
-  // printed on top of the East Docks venue label (same z row).
-  // v9 iteration 6: returns the label + diamond rects (when label is
-  // true) so the big map's greedy placer can register them before it
-  // places district/venue labels — the iter6 map shot showed PAY 'N'
-  // SPRAY printed over Fuego Island because the placer could not see
-  // this fixed label.
-  function drawShops(ctx, toMap, world, label) {
-    if (!world.shops) return [];
-    const defs = [
-      { s: world.shops.gun, color: '#8aff5a', name: 'AMMU-NATION', lx: 8, ly: 4, align: 'left' },
-      { s: world.shops.spray, color: '#ff5aff', name: "PAY 'N' SPRAY", lx: 8, ly: 22, align: 'left' },
-    ];
-    const rects = [];
-    for (const def of defs) {
-      const { s, color, name } = def;
-      const [mx, mz] = toMap(s.x, s.z);
-      ctx.fillStyle = color;
-      ctx.beginPath();
-      ctx.moveTo(mx, mz - 5);
-      ctx.lineTo(mx + 5, mz);
-      ctx.lineTo(mx, mz + 5);
-      ctx.lineTo(mx - 5, mz);
-      ctx.closePath();
-      ctx.fill();
-      if (label) {
-        ctx.fillStyle = color;
-        ctx.font = 'bold 13px system-ui, sans-serif';
-        ctx.textAlign = def.align;
-        ctx.fillText(name, mx + def.lx, mz + def.ly);
-        ctx.textAlign = 'left';
-        // Collision rects: the label text (baseline at mz+ly, 13px font)
-        // and the diamond itself, so no greedy label covers either.
-        const w = ctx.measureText(name).width;
-        rects.push({ x: mx + def.lx - 2, y: mz + def.ly - 11, w: w + 4, h: 18 });
-        rects.push({ x: mx - 6, y: mz - 6, w: 12, h: 12 });
+  paintMapBase(ctx, w, h, detailed) {
+    ctx.fillStyle = '#7fae6a';
+    ctx.fillRect(0, 0, w, h);
+    // sea
+    ctx.fillStyle = '#2b7fb8';
+    const [seaX] = this.worldToMap(196, 0, w, h);
+    ctx.fillRect(seaX, 0, w - seaX, h);
+    // sand
+    ctx.fillStyle = '#e8d29a';
+    const [sandX] = this.worldToMap(176, 0, w, h);
+    ctx.fillRect(sandX, 0, seaX - sandX, h);
+    if (detailed) {
+      const tints = { glass: '#a8c8dc', brick: '#c89878', deco: '#f2e3c2', stucco: '#e8cfa8', residential: '#d8c8b0', mercado: '#e8b878', marina: '#bcd8e4', park: '#a8d498', commercial: '#d8d0c0' };
+      for (const d of DISTRICTS) {
+        if (d.name === 'DOWNTOWN') continue;
+        const [x0, z0] = this.worldToMap(d.x0, d.z0, w, h);
+        const [x1, z1] = this.worldToMap(d.x1, d.z1, w, h);
+        ctx.fillStyle = tints[d.style] || '#cccccc';
+        ctx.fillRect(x0, z0, x1 - x0, z1 - z0);
       }
     }
-    return rects;
+    // roads
+    ctx.strokeStyle = '#4a5058';
+    ctx.lineWidth = Math.max(2, w / 90);
+    for (const a of AVENUES) {
+      const [x, z0] = this.worldToMap(a.x, cfg.world.minZ, w, h);
+      const [, z1] = this.worldToMap(a.x, cfg.world.maxZ, w, h);
+      ctx.beginPath(); ctx.moveTo(x, z0); ctx.lineTo(x, z1); ctx.stroke();
+    }
+    for (const s of STREETS) {
+      const [x0, z] = this.worldToMap(cfg.world.minX, s.z, w, h);
+      const [x1] = this.worldToMap(cfg.world.maxX, s.z, w, h);
+      ctx.beginPath(); ctx.moveTo(x0, z); ctx.lineTo(x1, z); ctx.stroke();
+    }
   }
 
-  function drawMinimap(world) {
-    const size = 200;
-    const half = world.half + 40; // ±190: reaches the sea (x 172) and the pier start.
-    const ctx = mapCtx;
-    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    const toMap = drawMapBase(ctx, size, world, half);
-    // Police search zone: the circle the heat cools outside of.
-    if (world.searchZone) {
-      const [zx, zy] = toMap(world.searchZone.x, world.searchZone.z);
-      const zr = (world.searchZone.r / (half * 2)) * size;
-      ctx.strokeStyle = 'rgba(255, 90, 74, 0.9)';
-      ctx.lineWidth = 2;
-      ctx.beginPath();
-      ctx.arc(zx, zy, zr, 0, Math.PI * 2);
-      ctx.stroke();
-      ctx.fillStyle = 'rgba(255, 90, 74, 0.12)';
-      ctx.fill();
+  paintMinimap(state) {
+    if (!this.minictx) return;
+    const w = this.minimap.width, h = this.minimap.height;
+    const ctx = this.minictx;
+    this.paintMapBase(ctx, w, h, false);
+    ctx.fillStyle = '#3366dd';
+    for (const c of state.policeCars) {
+      const [x, z] = this.worldToMap(c.x, c.z, w, h);
+      ctx.fillRect(x - 2, z - 2, 4, 4);
     }
-    drawGpsRoute(ctx, toMap, world);
-    // Landmarks.
-    ctx.fillStyle = '#8ec9ee';
-    for (const key of Object.keys(world.landmarks)) {
-      const lm = world.landmarks[key];
-      const [mx, mz] = toMap(lm.x, lm.z);
-      ctx.fillRect(mx - 2, mz - 2, 4, 4);
+    if (state.target) {
+      const [x, z] = this.worldToMap(state.target.x, state.target.z, w, h);
+      ctx.fillStyle = '#ffd75e';
+      ctx.beginPath(); ctx.arc(x, z, 4, 0, Math.PI * 2); ctx.fill();
     }
-    // Mission marker: pulsing yellow diamond.
-    if (world.missionTarget) {
-      const [mx, mz] = toMap(world.missionTarget.x, world.missionTarget.z);
-      const pulse = 5 + 2 * Math.sin(world.time * 4);
-      ctx.fillStyle = '#ffd23e';
-      ctx.beginPath();
-      ctx.moveTo(mx, mz - pulse);
-      ctx.lineTo(mx + pulse, mz);
-      ctx.lineTo(mx, mz + pulse);
-      ctx.lineTo(mx - pulse, mz);
-      ctx.closePath();
-      ctx.fill();
-    }
-    // Enemies red, police blue (roadblocks included), officers light blue.
-    for (const e of world.enemies) {
-      if (!e.alive) continue;
-      const [mx, mz] = toMap(e.group.position.x, e.group.position.z);
-      ctx.fillStyle = '#ff3a2e';
-      ctx.beginPath();
-      ctx.arc(mx, mz, 3, 0, Math.PI * 2);
-      ctx.fill();
-    }
-    for (const car of world.policeCars) {
-      const [mx, mz] = toMap(car.group.position.x, car.group.position.z);
-      ctx.fillStyle = '#4a90ff';
-      ctx.beginPath();
-      ctx.arc(mx, mz, 3.5, 0, Math.PI * 2);
-      ctx.fill();
-    }
-    for (const car of world.roadblocks || []) {
-      const [mx, mz] = toMap(car.group.position.x, car.group.position.z);
-      ctx.fillStyle = '#ff9a3e';
-      ctx.beginPath();
-      ctx.arc(mx, mz, 3.5, 0, Math.PI * 2);
-      ctx.fill();
-    }
-    drawVisionCones(ctx, toMap, world, size, half);
-    drawShops(ctx, toMap, world, false);
-    // Player arrow.
-    const [px, pz] = toMap(world.playerX, world.playerZ);
+    const [px, pz] = this.worldToMap(state.player.x, state.player.z, w, h);
     ctx.save();
     ctx.translate(px, pz);
-    ctx.rotate(world.playerHeading);
+    ctx.rotate(state.playerHeading);
     ctx.fillStyle = '#ffffff';
-    ctx.strokeStyle = '#111111';
-    ctx.lineWidth = 1.5;
     ctx.beginPath();
-    ctx.moveTo(0, -8);
-    ctx.lineTo(5, 6);
-    ctx.lineTo(0, 3);
-    ctx.lineTo(-5, 6);
-    ctx.closePath();
+    ctx.moveTo(0, -6); ctx.lineTo(4, 5); ctx.lineTo(-4, 5); ctx.closePath();
     ctx.fill();
-    ctx.stroke();
     ctx.restore();
-    // North.
-    ctx.fillStyle = '#ffffff';
-    ctx.font = 'bold 13px system-ui, sans-serif';
-    ctx.fillText('N', 6, 16);
   }
 
-  // The full city map (M): same base as the minimap, bigger, with district
-  // names, named venues, the GPS route, the current job and a legend.
-  function drawBigMap(world) {
-    if (!bigCtx) return;
-    const size = 640;
-    const half = world.half + 150; // ±300: reaches Fuego Island (x 272).
-    const ctx = bigCtx;
-    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    const toMap = drawMapBase(ctx, size, world, half);
-    // The search-zone header's rect, captured so the greedy label placer
-    // below can register it — the iter6 map shot showed PALM GARDENS
-    // printed over this header because the placer could not see it.
-    let searchHeaderRect = null;
-    if (world.searchZone) {
-      const [zx, zy] = toMap(world.searchZone.x, world.searchZone.z);
-      const zr = (world.searchZone.r / (half * 2)) * size;
-      ctx.strokeStyle = 'rgba(255, 90, 74, 0.95)';
-      ctx.lineWidth = 3;
-      ctx.beginPath();
-      ctx.arc(zx, zy, zr, 0, Math.PI * 2);
-      ctx.stroke();
-      ctx.fillStyle = 'rgba(255, 90, 74, 0.12)';
-      ctx.fill();
-      ctx.fillStyle = '#ff8a7a';
-      ctx.font = 'bold 15px system-ui, sans-serif';
-      // Centred inside the top of the circle: the old header sat above
-      // the circle and clipped against the canvas edge on a big zone.
-      const header = 'SEARCH ZONE — leave it to lose the cops';
-      const hw = ctx.measureText(header).width;
-      const hx = Math.max(8, Math.min(zx - hw / 2, size - hw - 8));
-      const hy = Math.max(24, zy - zr + 22);
-      ctx.fillText(header, hx, hy);
-      searchHeaderRect = { x: hx - 2, y: hy - 14, w: hw + 4, h: 20 };
-    }
-    drawGpsRoute(ctx, toMap, world);
-    // v9 iteration 6 — label placement is greedy and collision-free:
-    // every label is a job with a priority (districts first, venues
-    // second) and a preferred spot; the placer tries the preferred spot,
-    // then nudges up / down / sideways in steps, and DROPS the label if
-    // no free spot exists — a dropped venue label beats two labels
-    // printed on top of each other. Markers stay at their landmarks;
-    // only the text moves.
-    const placed = [];
-    // Fixed labels register FIRST, before any greedy label is placed:
-    // the search-zone header (drawn above) and the shop labels (drawn
-    // here, moved up from the end of the function) — both are fixed
-    // spots the placer must route around. Without this the iter6 map
-    // shot showed PALM GARDENS over the search header and PAY 'N'
-    // SPRAY over Fuego Island.
-    if (searchHeaderRect) placed.push(searchHeaderRect);
-    for (const r of drawShops(ctx, toMap, world, true)) placed.push(r);
-    // fillText draws with the BASELINE at y, so the collision rect is
-    // [px, py - 14, w, 20] (14 px above the baseline, 6 below).
-    function placeLabel(text, font, mx, mz, ox, oy) {
-      ctx.font = font;
-      const w = ctx.measureText(text).width;
-      const h = 20;
-      // Candidate baselines, preferred first, then nudges. The left-side
-      // nudges (for edge labels like Fuego Island, whose preferred spot
-      // runs off the canvas) also try up/down, and the long vertical
-      // nudges clear a neighbour's whole label height.
-      const cands = [
-        [mx + ox, mz + oy],
-        [mx + ox, mz + oy - 20],
-        [mx + ox, mz + oy + 20],
-        [mx + ox - w - 10, mz + oy],
-        [mx + ox + 10, mz + oy],
-        [mx + ox, mz + oy - 40],
-        [mx + ox, mz + oy + 40],
-        [mx + ox - w - 10, mz + oy - 20],
-        [mx + ox - w - 10, mz + oy + 20],
-        [mx + ox, mz + oy - 60],
-        [mx + ox, mz + oy + 60],
-      ];
-      for (const [px, py] of cands) {
-        const top = py - 14;
-        if (px < 4 || px + w > size - 4 || top < 4 || py > size - 4) continue;
-        let hit = false;
-        for (const r of placed) {
-          if (px < r.x + r.w + 4 && px + w + 4 > r.x && top < r.y + r.h + 4 && top + h + 4 > r.y) { hit = true; break; }
-        }
-        if (hit) continue;
-        placed.push({ x: px, y: top, w, h });
-        ctx.fillText(text, px, py);
-        return true;
-      }
-      return false;
-    }
-    // District names, from the config table. Three labels are moved off
-    // their centre because a named venue sits there: BEACHFRONT goes to
-    // the north end of the strip (short name, clear of the boardwalk),
-    // PALM GARDENS goes to the park's far corner (clear of the safehouse),
-    // and DOWNTOWN drops below the hospital label.
-    const LABEL_POS = {
-      beachfront: { x: 179, z: -100, name: 'BEACHFRONT' },
-      'palm-gardens': { x: -135, z: -135 },
-    };
-    ctx.fillStyle = 'rgba(255, 255, 255, 0.75)';
+  paintBigMap(state) {
+    if (!this.bigctx) return;
+    const w = this.bigmap.width, h = this.bigmap.height;
+    const ctx = this.bigctx;
+    // sea everywhere, then land, island, districts, roads on top
+    ctx.fillStyle = MAP_COLORS.sea;
+    ctx.fillRect(0, 0, w, h);
+    const [lx0, lz0] = this.bigToMap(-150, -150);
+    const [lx1, lz1] = this.bigToMap(196, 150);
+    ctx.fillStyle = MAP_COLORS.land;
+    ctx.fillRect(lx0, lz0, lx1 - lx0, lz1 - lz0);
+    const [sx0] = this.bigToMap(153, 0);
+    ctx.fillStyle = MAP_COLORS.sand;
+    ctx.fillRect(sx0, lz0, lx1 - sx0, lz1 - lz0);
+    // causeway first, island disc on top so the island reads grass
+    ctx.fillStyle = MAP_COLORS.road;
+    const [cx0, cz0] = this.bigToMap(160, 92);
+    const [cx1, cz1] = this.bigToMap(251, 108);
+    ctx.fillRect(cx0, cz0, cx1 - cx0, cz1 - cz0);
+    const [ix, iz] = this.bigToMap(cfg.world.islandX, cfg.world.islandZ);
+    ctx.fillStyle = MAP_COLORS.grass;
+    ctx.beginPath(); ctx.arc(ix, iz, cfg.world.islandR * MAP.scale, 0, Math.PI * 2); ctx.fill();
+    const tints = { glass: '#a8c8dc', brick: '#c89878', deco: '#f2e3c2', stucco: '#e8cfa8', residential: '#d8c8b0', mercado: '#e8b878', marina: '#bcd8e4', park: '#a8d498', commercial: '#d8d0c0' };
     for (const d of DISTRICTS) {
-      if (d.id === 'downtown') continue; // the fallback has no centre worth labelling
-      const pos = LABEL_POS[d.id] || d;
-      const cx = (pos.x0 !== undefined ? (pos.x0 + pos.x1) / 2 : pos.x);
-      const cz = (pos.z0 !== undefined ? (pos.z0 + pos.z1) / 2 : pos.z);
-      const name = pos.name || d.name;
-      const [mx, mz] = toMap(cx, cz);
-      // Centre the text on the district centre: measure first, then
-      // offset by half the width (placeLabel takes a top-left offset).
-      ctx.font = 'bold 17px system-ui, sans-serif';
-      const w = ctx.measureText(name).width;
-      placeLabel(name, 'bold 17px system-ui, sans-serif', mx, mz, -w / 2, 0);
+      if (d.name === 'DOWNTOWN') continue;
+      const [x0, z0] = this.bigToMap(d.x0, d.z0);
+      const [x1, z1] = this.bigToMap(d.x1, d.z1);
+      ctx.fillStyle = tints[d.style] || '#cccccc';
+      ctx.fillRect(x0, z0, x1 - x0, z1 - z0);
+      ctx.fillStyle = 'rgba(20,30,40,0.75)';
+      ctx.font = 'bold 10px Arial';
+      ctx.fillText(d.name, x0 + 4, z0 + 13);
     }
-    // DOWNTOWN label, placed by hand in the south-centre, below the
-    // hospital venue label so the two never print on top of each other.
-    {
-      const [mx, mz] = toMap(14, 135);
-      placeLabel('DOWNTOWN', 'bold 17px system-ui, sans-serif', mx, mz, -40, 0);
+    // roads as filled bands
+    ctx.fillStyle = MAP_COLORS.road;
+    for (const a of AVENUES) {
+      const [x] = this.bigToMap(a.x - 10, 0);
+      ctx.fillRect(x, lz0, 20 * MAP.scale, lz1 - lz0);
     }
-    // Named venues. Labels near the east edge are right-aligned so they
-    // do not run off the canvas; the tower label drops below the TOWER
-    // PLAZA district name instead of printing on top of it.
-    for (const key of Object.keys(world.landmarks)) {
-      const lm = world.landmarks[key];
-      const [mx, mz] = toMap(lm.x, lm.z);
-      ctx.fillStyle = '#8ec9ee';
-      ctx.fillRect(mx - 3, mz - 3, 6, 6);
-      ctx.fillStyle = '#eaf4ff';
-      ctx.font = 'bold 15px system-ui, sans-serif';
-      const w = ctx.measureText(lm.name).width;
-      if (key === 'tower') {
-        placeLabel(lm.name, 'bold 15px system-ui, sans-serif', mx, mz, 8, 34);
-      } else if (key === 'garage') {
-        // Below the marker: the GPS route's last leg runs into the garage
-        // from the side, and the label used to sit on the dashed line.
-        placeLabel(lm.name, 'bold 15px system-ui, sans-serif', mx, mz, 8, 22);
-      } else if (mx > size * 0.72) {
-        placeLabel(lm.name, 'bold 15px system-ui, sans-serif', mx, mz, -w - 8, 5);
-      } else {
-        placeLabel(lm.name, 'bold 15px system-ui, sans-serif', mx, mz, 8, 5);
-      }
+    for (const s of STREETS) {
+      const [, z] = this.bigToMap(0, s.z - 10);
+      ctx.fillRect(lx0, z, lx1 - lx0, 20 * MAP.scale);
     }
-    // Mission marker.
-    if (world.missionTarget) {
-      const [mx, mz] = toMap(world.missionTarget.x, world.missionTarget.z);
-      const pulse = 8 + 3 * Math.sin(world.time * 4);
-      ctx.fillStyle = '#ffd23e';
-      ctx.beginPath();
-      ctx.moveTo(mx, mz - pulse);
-      ctx.lineTo(mx + pulse, mz);
-      ctx.lineTo(mx, mz + pulse);
-      ctx.lineTo(mx - pulse, mz);
-      ctx.closePath();
-      ctx.fill();
+    ctx.fillStyle = '#20262e';
+    ctx.font = '9px Arial';
+    for (const l of LANDMARKS) {
+      if (l.id === 'island' || l.id === 'islandgate') continue;
+      const [x, z] = this.bigToMap(l.x, l.z);
+      ctx.fillRect(x - 2, z - 2, 4, 4);
+      ctx.fillText(l.name, x + 4, z + 3);
     }
-    drawVisionCones(ctx, toMap, world, size, half);
-    // (drawShops moved up: its labels register before the greedy labels
-    // are placed, so they cannot be printed over.)
-    // v9 iteration 5 (§2/§3): courier pickups (gold rings — the active
-    // job's drop is a green ring), race starts (white squares) and
-    // medals (gold dots, once Street Sense is 2+). Finished jobs and
-    // taken medals are not drawn; REP-locked jobs draw dimmed so the
-    // player can see what is coming.
-    if (world.deliveries) {
-      for (const d of world.deliveries) {
-        if (d.done) continue;
-        const [mx, mz] = toMap(d.pickup.x, d.pickup.z);
-        ctx.strokeStyle = d.locked ? 'rgba(255, 210, 62, 0.35)' : '#ffd23e';
-        ctx.lineWidth = 2;
-        ctx.beginPath();
-        ctx.arc(mx, mz, 6, 0, Math.PI * 2);
-        ctx.stroke();
-        if (d.active) {
-          const [dx, dz] = toMap(d.drop.x, d.drop.z);
-          ctx.strokeStyle = '#7dff8a';
-          ctx.lineWidth = 3;
-          ctx.beginPath();
-          ctx.arc(dx, dz, 8, 0, Math.PI * 2);
-          ctx.stroke();
-        }
-      }
+    ctx.fillStyle = '#7a2ea0';
+    for (const s of SHOPS) {
+      const [x, z] = this.bigToMap(s.x, s.z);
+      ctx.fillRect(x - 2, z - 2, 4, 4);
+      ctx.fillText(s.name, x + 4, z + 3);
     }
-    if (world.races) {
-      for (const r of world.races) {
-        if (r.won) continue;
-        const [mx, mz] = toMap(r.start.x, r.start.z);
-        ctx.fillStyle = r.locked ? 'rgba(255, 255, 255, 0.35)' : '#ffffff';
-        ctx.fillRect(mx - 5, mz - 5, 10, 10);
-        ctx.strokeStyle = '#111111';
-        ctx.lineWidth = 1;
-        ctx.strokeRect(mx - 5, mz - 5, 10, 10);
-      }
+    if (state.target) {
+      const [px, pz] = this.bigToMap(state.player.x, state.player.z);
+      const [tx, tz] = this.bigToMap(state.target.x, state.target.z);
+      ctx.strokeStyle = '#ffd75e';
+      ctx.lineWidth = 3;
+      ctx.beginPath(); ctx.moveTo(px, pz); ctx.lineTo(tx, tz); ctx.stroke();
+      ctx.fillStyle = '#ffd75e';
+      ctx.beginPath(); ctx.arc(tx, tz, 6, 0, Math.PI * 2); ctx.fill();
     }
-    if (world.showMedals && world.medals) {
-      ctx.fillStyle = '#ffd23e';
-      for (const m of world.medals) {
-        if (m.taken) continue;
-        const [mx, mz] = toMap(m.x, m.z);
-        ctx.beginPath();
-        ctx.arc(mx, mz, 3, 0, Math.PI * 2);
-        ctx.fill();
-      }
-    }
-    // Player arrow.
-    const [px, pz] = toMap(world.playerX, world.playerZ);
+    const [px, pz] = this.bigToMap(state.player.x, state.player.z);
     ctx.save();
     ctx.translate(px, pz);
-    ctx.rotate(world.playerHeading);
+    ctx.rotate(state.playerHeading);
     ctx.fillStyle = '#ffffff';
-    ctx.strokeStyle = '#111111';
-    ctx.lineWidth = 2;
     ctx.beginPath();
-    ctx.moveTo(0, -12);
-    ctx.lineTo(8, 9);
-    ctx.lineTo(0, 4);
-    ctx.lineTo(-8, 9);
-    ctx.closePath();
+    ctx.moveTo(0, -9); ctx.lineTo(6, 7); ctx.lineTo(-6, 7); ctx.closePath();
     ctx.fill();
-    ctx.stroke();
     ctx.restore();
-    // Legend.
     ctx.fillStyle = '#ffffff';
-    ctx.font = 'bold 15px system-ui, sans-serif';
-    ctx.fillText('N', 10, 22);
-    ctx.font = '15px system-ui, sans-serif';
-    ctx.fillStyle = '#ffd23e';
-    ctx.fillText('◆ mission target', 10, size - 46);
-    ctx.fillStyle = '#ff8a7a';
-    ctx.fillText('○ search zone', 10, size - 26);
-    ctx.fillStyle = '#8ec9ee';
-    ctx.fillText('■ named venue', 150, size - 26);
-    ctx.fillStyle = '#eaf4ff';
-    ctx.fillText('— GPS route', 290, size - 26);
-    ctx.fillStyle = '#ffd23e';
-    ctx.fillText('○ delivery pickup', 410, size - 26);
-    ctx.fillStyle = '#ffffff';
-    ctx.fillText('□ race start', 410, size - 46);
-    ctx.fillStyle = '#ffd23e';
-    ctx.fillText('● medal', 540, size - 46);
+    ctx.font = 'bold 14px Arial';
+    ctx.fillText('COSTA FUEGO — M to close', 12, 22);
   }
 
-  return { update, drawMinimap, drawBigMap, showMessage, showAutosave, clockText, toggleQuest, setQuestCollapsed, isQuestCollapsed };
+  toggleMap() {
+    this.mapOpen = !this.mapOpen;
+    return this.mapOpen;
+  }
+
+  closeMap() { this.mapOpen = false; }
+
+  weaponListText(owned, currentId) {
+    return WEAPONS.filter(w => owned.includes(w.id))
+      .map(w => (w.id === currentId ? '▸ ' : '· ') + w.name)
+      .join('  ');
+  }
+
+  weaponSlotsText(rep, owned) {
+    return WEAPONS.map((w, i) => {
+      const locked = rep < w.repNeed;
+      return (i + 1) + ' · ' + w.name.toUpperCase() + (locked ? ' LOCKED (REP ' + w.repNeed + ')' : '');
+    });
+  }
 }

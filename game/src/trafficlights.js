@@ -1,46 +1,54 @@
-// Traffic lights: one city-wide cycle, so every junction changes together
-// and the player can read the rhythm. The cycle is driven by game time
-// (fixed steps), never by the wall clock, so a staged screenshot always
-// sees the same lights.
-//
-// v9 iteration 3: the traffic AI reads the lights (see vehicles.js) —
-// red means stop at the stop line, yellow means stop if there is room.
-//
-// Phase (seconds into the cycle): NS green, then NS yellow, then EW green,
-// then EW yellow, then it repeats.
-import { CONFIG } from './config.js';
+// trafficlights.js — signal cycles for the six signalled junctions.
+// Each junction alternates green between the avenue flow and the street
+// flow with a short amber; traffic reads the phase to decide to stop.
 
-const L = CONFIG.lights;
-const CYCLE = (L.greenSeconds + L.yellowSeconds) * 2;
+import { JUNCTIONS } from './config.js';
 
-let clock = 0;
+const GREEN = 7;
+const AMBER = 1.6;
+const CYCLE = (GREEN + AMBER) * 2;
 
-export function updateLights(dt) {
-  clock += dt;
-}
-
-export function resetLights() {
-  clock = 0;
-}
-
-// 'green' | 'yellow' | 'red' for traffic travelling along an axis:
-// 'x' cars move east-west, 'z' cars move north-south.
-export function lightFor(axis) {
-  const t = clock % CYCLE;
-  const nsGreen = t < L.greenSeconds;
-  const nsYellow = t >= L.greenSeconds && t < L.greenSeconds + L.yellowSeconds;
-  const ewGreen = t >= L.greenSeconds + L.yellowSeconds
-    && t < L.greenSeconds + L.yellowSeconds + L.greenSeconds;
-  if (axis === 'z') {
-    if (nsGreen) return 'green';
-    if (nsYellow) return 'yellow';
-    return 'red';
+export class TrafficLights {
+  constructor() {
+    this.junctions = JUNCTIONS.map((j, i) => ({
+      x: j.x, z: j.z,
+      offset: (i * 3.7) % CYCLE,
+      phase: 'avenue',
+      lampA: 'green',
+      lampS: 'red',
+      timer: 0,
+    }));
+    this.time = 0;
   }
-  if (ewGreen) return 'green';
-  if (nsGreen || nsYellow) return 'red';
-  return 'yellow';
-}
 
-export function lightPhase() {
-  return lightFor('z');
+  update(dt) {
+    this.time += dt;
+    for (const j of this.junctions) {
+      const t = (this.time + j.offset) % CYCLE;
+      if (t < GREEN) { j.phase = 'avenue'; j.lampA = 'green'; j.lampS = 'red'; }
+      else if (t < GREEN + AMBER) { j.phase = 'avenue-amber'; j.lampA = 'amber'; j.lampS = 'red'; }
+      else if (t < GREEN * 2 + AMBER) { j.phase = 'street'; j.lampA = 'red'; j.lampS = 'green'; }
+      else { j.phase = 'street-amber'; j.lampA = 'red'; j.lampS = 'amber'; }
+      j.timer = t;
+    }
+  }
+
+  // Is the given flow allowed through junction j right now?
+  allows(j, flow) {
+    if (flow === 'avenue') return j.lampA === 'green';
+    return j.lampS === 'green';
+  }
+
+  nearest(x, z) {
+    let best = null, bestD = 1e9;
+    for (const j of this.junctions) {
+      const d = (j.x - x) * (j.x - x) + (j.z - z) * (j.z - z);
+      if (d < bestD) { bestD = d; best = j; }
+    }
+    return best;
+  }
+
+  snapshot() {
+    return this.junctions.map(j => ({ x: j.x, z: j.z, phase: j.phase, lampA: j.lampA, lampS: j.lampS }));
+  }
 }

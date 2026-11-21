@@ -1,19 +1,70 @@
-// Boot: start the title screen and the one render loop, or stage a screenshot
-// scene instead. ?seed=N fixes the city; ?shot=chase|combat|map|dialogue
-// (with &seed=N) stages that scene, paints it and sets window.__shotReady.
-import { createGame } from './game.js';
+// main.js — boot for Costa Fuego: builds the game, wires every menu
+// button, parses the screenshot-scene query (?shot=name&seed=n) and runs
+// the animation loop.
 
-const params = new URLSearchParams(window.location.search);
-const shot = params.get('shot');
-const seedParam = Number.parseInt(params.get('seed') ?? '', 10);
-const seed = Number.isInteger(seedParam) ? seedParam : 20261117;
+import { Game } from './game.js';
+import { SHOT_NAMES } from './shots.js';
 
-const canvas = document.getElementById('game');
-const game = createGame(canvas, seed);
-window.__game = game;
+function boot() {
+  const canvas = document.getElementById('game');
+  const params = new URLSearchParams(window.location.search);
+  const seed = params.get('seed') || 'costa-fuego';
+  const game = new Game(canvas, seed);
+  window.__gameReady = true;
 
-if (shot) {
-  game.stageShot(shot);
+  const on = (id, fn) => {
+    const node = document.getElementById(id);
+    if (node) node.addEventListener('click', fn);
+  };
+  on('btn-new-game', () => game.newGame());
+  on('btn-continue', () => game.continueGame());
+  on('btn-controls', () => game.setScreen('controls'));
+  on('btn-controls-back', () => game.setScreen('title'));
+  on('btn-resume', () => game.resume());
+  on('btn-quit', () => game.quitToTitle());
+  on('btn-save-game', () => game.save());
+  on('btn-respawn', () => game.respawn());
+  on('btn-restart-mission', () => { game.restartMission(); game.setScreen('play'); game.input.wantLock(true); });
+  on('btn-job-ok', () => game.closeJob());
+  on('btn-job-continue', () => game.closeJob());
+
+  const preset = document.getElementById('sel-preset');
+  if (preset) {
+    preset.addEventListener('change', () => {
+      if (preset.value !== 'CUSTOM') game.applyPreset(preset.value);
+    });
+  }
+  const slider = (id, fn) => {
+    const node = document.getElementById(id);
+    if (node) node.addEventListener('input', () => fn(Number(node.value)));
+  };
+  slider('rng-master', (v) => game.audio.setMasterVolume(v / 100));
+  slider('rng-effects', (v) => game.audio.setEffectsVolume(v / 100));
+  slider('rng-engine', (v) => game.audio.setEngineVolume(v / 100));
+  slider('rng-traffic', (v) => {
+    game.traffic.setTrafficCount(v);
+    game.settings.traffic = v;
+    game.settings.preset = 'CUSTOM';
+    if (preset) preset.value = 'CUSTOM';
+  });
+  slider('rng-crowd', (v) => game.crowd.setWalkerCount(v));
+
+  const shot = params.get('shot');
+  if (shot && SHOT_NAMES.includes(shot)) {
+    game.startShot(shot);
+  } else if (shot) {
+    game.startShot('play');
+  }
+
+  function loop(nowMs) {
+    game.frame(nowMs);
+    requestAnimationFrame(loop);
+  }
+  requestAnimationFrame(loop);
+}
+
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', boot);
 } else {
-  game.run();
+  boot();
 }

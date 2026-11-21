@@ -1,238 +1,205 @@
-// Missions: six jobs for Marla Quinn, in order. Each mission knows its target
-// point, its timer, and what completes it; the game drives the state machine.
-//
-// v6: missions are a conversation, not a briefing. Each job opens with a
-// short dialogue (Marla and Rico trade lines in the dialogue bar), stage
-// changes get their own line, and completing a job shows its closing line —
-// so the story is told while you play, not in a paragraph on the title
-// screen. Stage counts (STAGE n/m) and per-mission elapsed time feed the
-// HUD banner and the JOB COMPLETE screen.
-import { MISSION_DEFS } from './config.js';
+// missions.js — story missions, street races and delivery jobs.
+// The story follows Marla, who runs the garage on the west side, and the
+// player's climb from new kid to Costa legend. Races and deliveries are
+// repeatable side jobs unlocked by reputation.
 
-export const MISSION_STATE = {
-  IDLE: 'idle',
-  ACTIVE: 'active',
-  DONE: 'done',
-  FAILED: 'failed',
-};
+import { RACES, DELIVERIES, LANDMARKS } from './config.js';
 
-// One dialogue line shows for this long before the next one rolls in.
-export const DIALOGUE_LINE_SECONDS = 4.5;
+const lm = (id) => LANDMARKS.find(l => l.id === id);
 
-export function createMissions(landmarks) {
-  const targets = [
-    { x: landmarks.garage.x, z: landmarks.garage.z, radius: 9 },
-    { x: landmarks.marina.x, z: landmarks.marina.z, radius: 8 },
-    { x: landmarks.docks.x, z: landmarks.docks.z, radius: 10 },
-    { x: landmarks.garage.x, z: landmarks.garage.z, radius: 9 },
-    { x: landmarks.docks.x, z: landmarks.docks.z, radius: 14 },
-    { x: landmarks.bank.x, z: landmarks.bank.z, radius: 9 },
-  ];
-  return {
-    index: 0,
-    state: MISSION_STATE.IDLE,
-    timer: 0,
-    stage: 0,
-    defs: MISSION_DEFS,
-    targets,
-    enemiesLeft: 0,
-    message: '',
-    dialogueQueue: [],
-    currentLine: null,
-    dialogueTimer: 0,
-    elapsed: 0,
-    maxStars: 0,
-  };
-}
+export const STORY = [
+  {
+    id: 'meet-marla', chapter: 'CH.1 · HOMECOMING', name: 'Meet Marla',
+    objective: "Walk to Marla's Garage and meet Marla",
+    target: { x: -112, z: 112 }, radius: 10, reward: 300, rep: 5,
+    dialogue: [
+      { who: 'MARLA QUINN', line: "You must be the new kid. I'm Marla Quinn — this garage keeps Costa moving, and I could use a driver who doesn't ask questions." },
+      { who: 'MARLA QUINN', line: 'First job is simple: get wheels, get known. Come back when you have a car of your own. Take this for the road.' },
+    ],
+  },
+  {
+    id: 'first-wheels', chapter: 'CH.1 · HOMECOMING', name: 'Hot Wheels',
+    objective: 'Steal the coupe and drive it to Fuego Bank',
+    target: { x: 56, z: -56 }, radius: 8, reward: 350, rep: 8, needCar: true,
+    dialogue: [
+      { who: 'MARLA QUINN', line: 'Nice ride. The bank on Jasmine Ave owes me a favour — park out front so they remember it. Good work.' },
+    ],
+  },
+  {
+    id: 'reef-trouble', chapter: 'CH.2 · REEF TROUBLE', name: 'Reef Trouble',
+    objective: 'Head to Neon Plaza and deal with the Reef Kings',
+    target: { x: 56, z: 0 }, radius: 10, reward: 500, rep: 12,
+    dialogue: [
+      { who: 'MARLA QUINN', line: 'The Reef Kings are squeezing my drivers at Neon Plaza. Show them Costa has a new name on the street.' },
+      { who: 'MARLA QUINN', line: "That's the spirit. They'll think twice before taxing my garage again." },
+    ],
+  },
+  {
+    id: 'harbor-run', chapter: 'CH.2 · REEF TROUBLE', name: 'Harbor Run',
+    objective: 'Pick up the package at East Docks and bring it to the Safehouse',
+    target: { x: -112, z: -112 }, radius: 8, reward: 600, rep: 15, needCar: true,
+    dialogue: [
+      { who: 'MARLA QUINN', line: 'A crate came in at East Docks with no paperwork. Bring it to the Safehouse, quiet and quick.' },
+    ],
+  },
+  {
+    id: 'island-business', chapter: 'CH.3 · ISLAND BUSINESS', name: 'Island Business',
+    objective: 'Drive through the Island Gate to Fuego Island',
+    target: { x: 247, z: 100 }, radius: 14, reward: 800, rep: 20, needCar: true,
+    dialogue: [
+      { who: 'MARLA QUINN', line: 'Fuego Island is where the real money sleeps. Cross the causeway and make yourself known at the villa.' },
+    ],
+  },
+  {
+    id: 'king-of-streets', chapter: 'CH.3 · ISLAND BUSINESS', name: 'King of the Streets',
+    objective: 'Return to the Fuego Tower and claim the city',
+    target: { x: 0, z: 0 }, radius: 12, reward: 1200, rep: 30,
+    dialogue: [
+      { who: 'MARLA QUINN', line: 'From new kid to king of these streets. Costa Fuego is yours now — try not to burn it down.' },
+    ],
+  },
+];
 
-export function currentMission(missions) {
-  if (missions.index >= missions.defs.length) return null;
-  return missions.defs[missions.index];
-}
-
-export function currentTarget(missions) {
-  if (missions.index >= missions.targets.length) return null;
-  // Mission 2 has two stages: steal the coupe, then deliver it.
-  // v9 iteration 7: the garage target is the landmark (it moved to
-  // (-112,112)) — never a hardcoded point, or the next garage move
-  // strands the delivery again.
-  if (missions.index === 1 && missions.stage === 1) {
-    return missions.targets[3];
+export class MissionRunner {
+  constructor() {
+    this.storyIndex = 0;
+    this.storyDone = false;
+    this.active = null; // {type:'race'|'delivery', def, step, timer}
+    this.completed = [];
+    this.questLog = [];
+    this.lastDialogue = null;
+    this.raceWins = [false, false, false];
+    this.deliveriesDone = [false, false, false];
   }
-  // Mission 6 has two stages: rob the bank, then reach the safehouse.
-  if (missions.index === 5 && missions.stage === 1) {
-    return { x: -112, z: -112, radius: 9 };
+
+  get index() { return this.storyIndex; }
+  get state() { return this.storyDone ? 'done' : 'active'; }
+
+  currentStory() {
+    return this.storyDone ? null : STORY[this.storyIndex];
   }
-  return missions.targets[missions.index];
-}
 
-// "STAGE 1/2" for the HUD banner; single-stage jobs show "STAGE 1/1".
-export function stageLabel(missions) {
-  const def = currentMission(missions);
-  if (!def) return '';
-  const total = def.stages || 1;
-  return `STAGE ${Math.min(missions.stage + 1, total)}/${total}`;
-}
-
-// Next job up, for the HUD banner's "NEXT" line — what the player does
-// after this one, so the story always has a forward direction.
-export function nextMissionTitle(missions) {
-  const next = missions.defs[missions.index + 1];
-  return next ? `CH.${next.id} ${next.title.toUpperCase()}` : '';
-}
-
-// Progress through the current job, 0–1, for the HUD stage bar: enemies
-// down for Payback, time left for the timed jobs, distance closed for the
-// rest. A bar that moves is worth more than a bar that sits still.
-export function missionProgress(missions, playerPos) {
-  const def = currentMission(missions);
-  if (!def || missions.state !== 'active') return 0;
-  if (missions.index === 4) {
-    return 1 - missions.enemiesLeft / 4;
-  }
-  if (missions.timer > 0) {
-    const total = missions.timerTotal || 1;
-    return 1 - missions.timer / total;
-  }
-  const target = currentTarget(missions);
-  if (!target || !playerPos) return 0;
-  const start = missions.startDist || 1;
-  const d = Math.hypot(target.x - playerPos.x, target.z - playerPos.z);
-  return Math.max(0, Math.min(1, 1 - d / start));
-}
-
-export function queueDialogue(missions, lines) {
-  if (!lines || lines.length === 0) return;
-  missions.dialogueQueue = [...lines];
-  missions.currentLine = missions.dialogueQueue.shift();
-  missions.dialogueTimer = DIALOGUE_LINE_SECONDS;
-}
-
-export function sayLine(missions, who, text) {
-  missions.dialogueQueue.push({ who, text });
-  if (!missions.currentLine) {
-    missions.currentLine = missions.dialogueQueue.shift();
-    missions.dialogueTimer = DIALOGUE_LINE_SECONDS;
-  }
-}
-
-// Roll the dialogue forward; call once per physics step.
-export function advanceDialogue(missions, dt) {
-  if (!missions.currentLine) return;
-  missions.dialogueTimer -= dt;
-  if (missions.dialogueTimer > 0) return;
-  missions.currentLine = missions.dialogueQueue.length > 0 ? missions.dialogueQueue.shift() : null;
-  missions.dialogueTimer = DIALOGUE_LINE_SECONDS;
-}
-
-export function startMission(missions, index, cfg) {
-  missions.index = index;
-  missions.state = MISSION_STATE.ACTIVE;
-  missions.stage = 0;
-  missions.timer = 0;
-  missions.elapsed = 0;
-  missions.maxStars = 0;
-  const def = missions.defs[index];
-  if (index === 2) missions.timer = cfg.missions.deliveryTime;
-  if (index === 3) missions.timer = cfg.missions.getawayTime;
-  missions.timerTotal = missions.timer;
-  missions.message = `${def.giver}: ${def.brief}`;
-  queueDialogue(missions, def.dialogue);
-  return def;
-}
-
-export function missionObjectiveText(missions) {
-  const def = currentMission(missions);
-  if (!def) return 'All jobs done — Costa Fuego is yours.';
-  // v9 iteration 4: the REP gate. Mission 6 (The Big Score) needs REP
-  // 30 — while the gate holds, the objective says so instead of the
-  // bank robbery brief.
-  if (missions.repGate) return 'The Big Score needs REP 30 — run street races and stunts to earn it';
-  if (missions.index === 1 && missions.stage === 1) return 'Deliver the orange coupe to the garage';
-  if (missions.index === 5 && missions.stage === 1) return 'Escape to the safehouse';
-  if (missions.index === 4) return `Take down the Reef Kings (${missions.enemiesLeft} left)`;
-  return def.objective;
-}
-
-// Advance the mission clock and report what happened this frame.
-// Returns 'complete' | 'fail' | 'stage' | null.
-export function updateMission(missions, dt, playerPos, playerInCar, inTargetCar, enemiesLeft) {
-  if (missions.state !== MISSION_STATE.ACTIVE) return null;
-  const def = currentMission(missions);
-  if (!def) return null;
-  missions.elapsed += dt;
-  if (missions.timer > 0) {
-    missions.timer -= dt;
-    if (missions.timer <= 0) {
-      missions.state = MISSION_STATE.FAILED;
-      missions.message = 'Too slow — the job fell through. Press R to try again.';
-      return 'fail';
-    }
-  }
-  const target = currentTarget(missions);
-  const dx = playerPos.x - target.x;
-  const dz = playerPos.z - target.z;
-  const dist = Math.hypot(dx, dz);
-  if (missions.startDist === undefined) missions.startDist = Math.max(1, dist);
-  if (missions.stage === 0) missions.startDist = Math.max(missions.startDist, dist);
-
-  // Mission 2, stage 0: the player must be IN the orange coupe at the marina.
-  if (missions.index === 1 && missions.stage === 0) {
-    if (inTargetCar) {
-      missions.stage = 1;
-      missions.message = 'Got it. Now bring the coupe to the garage.';
-      sayLine(missions, 'Marla Quinn', def.stageLine.replace(/^Marla Quinn: /, ''));
-      missions.startDist = undefined;
-      return 'stage';
+  // Returns 'complete' when the player reaches the current story target.
+  checkStory(player, inCar) {
+    const m = this.currentStory();
+    if (!m) return null;
+    const d = Math.hypot(player.x - m.target.x, player.z - m.target.z);
+    if (d <= m.radius && (!m.needCar || inCar)) {
+      this.completed.push(m.id);
+      this.lastDialogue = m.dialogue;
+      for (const line of m.dialogue) this.questLog.push(line.who + ': ' + line.line);
+      this.storyIndex++;
+      if (this.storyIndex >= STORY.length) this.storyDone = true;
+      return m;
     }
     return null;
   }
-  // Mission 5: all four enemies must be down.
-  if (missions.index === 4) {
-    missions.enemiesLeft = enemiesLeft;
-    if (enemiesLeft <= 0) {
-      missions.state = MISSION_STATE.DONE;
-      return 'complete';
+
+  availableRaces(rep) { return RACES.filter(r => rep >= r.repNeed); }
+  availableDeliveries(rep) { return DELIVERIES.filter(d => rep >= d.repNeed); }
+
+  startRace(def) {
+    this.active = { type: 'race', def, step: 0, timer: def.time, started: false };
+    return this.active;
+  }
+
+  startDelivery(def) {
+    // the E press at the pickup IS the pickup: head straight for the drop
+    this.active = { type: 'delivery', def, step: 1, timer: def.time, started: true };
+    return this.active;
+  }
+
+  activeTarget() {
+    if (!this.active) return null;
+    const a = this.active;
+    if (a.type === 'race') {
+      if (!a.started) return a.def.start;
+      return a.def.points[a.step] || null;
+    }
+    return a.step === 0 ? a.def.pickup : a.def.drop;
+  }
+
+  // Advance the active side job. Returns 'checkpoint' | 'done' | 'failed' | null.
+  updateActive(dt, player) {
+    if (!this.active) return null;
+    const a = this.active;
+    const target = this.activeTarget();
+    if (a.started) {
+      a.timer -= dt;
+      if (a.timer <= 0) { this.active = null; return 'failed'; }
+    }
+    if (!target) return null;
+    const d = Math.hypot(player.x - target.x, player.z - target.z);
+    const reach = a.type === 'delivery' ? 12 : 7;
+    if (d <= reach) {
+      if (!a.started) { a.started = true; return 'checkpoint'; }
+      if (a.type === 'race') {
+        a.step++;
+        if (a.step >= a.def.points.length) {
+          this.lastDone = { type: 'race', def: a.def };
+          const idx = RACES.indexOf(a.def);
+          if (idx >= 0) this.raceWins[idx] = true;
+          this.active = null; return 'done';
+        }
+        return 'checkpoint';
+      }
+      if (a.step === 0) { a.step = 1; return 'checkpoint'; }
+      this.lastDone = { type: 'delivery', def: a.def };
+      const didx = DELIVERIES.indexOf(a.def);
+      if (didx >= 0) this.deliveriesDone[didx] = true;
+      this.active = null;
+      return 'done';
     }
     return null;
   }
-  // Mission 6, stage 0: reach the bank and hold still a moment (the robbery).
-  if (missions.index === 5 && missions.stage === 0) {
-    if (dist < target.radius) {
-      missions.stage = 1;
-      missions.message = 'The vault is open — grab the cash and run to the safehouse!';
-      sayLine(missions, 'Marla Quinn', def.stageLine.replace(/^Marla Quinn: /, ''));
-      missions.startDist = undefined;
-      return 'stage';
+
+  cancelActive() { this.active = null; }
+
+  objectiveText() {
+    if (this.active) {
+      const a = this.active;
+      if (a.type === 'race') return a.started ? 'Race: hit the next checkpoint' : 'Race: reach the start line';
+      return a.step === 0 ? 'Delivery: pick up the package' : 'Delivery: drop it off';
     }
-    return null;
+    const m = this.currentStory();
+    return m ? m.objective : 'Free roam — races, deliveries and mayhem await';
   }
-  if (dist < target.radius) {
-    missions.state = MISSION_STATE.DONE;
-    return 'complete';
+
+  chapterText() {
+    const m = this.currentStory();
+    return m ? m.chapter : 'COSTA LEGEND · FREE ROAM';
   }
-  return null;
+
+  nextChapterText() {
+    const current = this.currentStory();
+    if (!current) return 'STORY COMPLETE';
+    for (let i = this.storyIndex + 1; i < STORY.length; i++) {
+      if (STORY[i].chapter !== current.chapter) {
+        return 'NEXT: ' + STORY[i].chapter + ' · ' + STORY[i].name;
+      }
+    }
+    return 'NEXT: ' + current.chapter + ' FINALE';
+  }
+
+  raceState() {
+    if (!this.active || this.active.type !== 'race' || !this.active.started) return null;
+    return { cp: this.active.step + 1, timeLeft: this.active.timer };
+  }
+
+  deliveryState() {
+    const a = this.active && this.active.type === 'delivery' ? this.active : null;
+    return {
+      active: a ? { idx: DELIVERIES.indexOf(a.def), timeLeft: a.timer } : null,
+      done: [...this.deliveriesDone],
+    };
+  }
+
+  targetPos() {
+    const t = this.activeTarget();
+    if (t) return t;
+    const m = this.currentStory();
+    return m ? m.target : null;
+  }
 }
 
-export function completeMission(missions) {
-  const def = currentMission(missions);
-  missions.index += 1;
-  missions.state = MISSION_STATE.IDLE;
-  missions.stage = 0;
-  missions.timer = 0;
-  missions.startDist = undefined;
-  if (missions.index < missions.defs.length) {
-    missions.message = `Job done — $${def.reward} paid. Next: ${missions.defs[missions.index].title}.`;
-  } else {
-    missions.message = 'The Big Score is done. Costa Fuego is yours, Rico.';
-  }
-  return def ? def.reward : 0;
-}
-
-export function failMission(missions) {
-  missions.state = MISSION_STATE.IDLE;
-  missions.stage = 0;
-  missions.timer = 0;
-  missions.startDist = undefined;
-  missions.message = 'Job failed. Press R to try again.';
-}
+export { lm as landmarkById };
