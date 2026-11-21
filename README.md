@@ -145,7 +145,9 @@ drive the boardwalk at dusk.
 - **Districts:** the city is divided into nine named districts — Fuego
   Beachfront, Old Harbor, Marina, Palm Gardens, Mercado, North End, Tower
   Plaza, Westside, Downtown — shown above the minimap as you cross them.
-- **Start and save:** title screen with the story, New Game, Continue with
+- **Start and save:** title screen with the story over a GTA-cover-style
+  poster collage of the game's own renders (chase, skyline, combat, night
+  market, Marla's Garage), New Game, Continue with
   your progress on it (chapter, cash, reputation, day) and a Controls panel;
   Enter starts the game. localStorage save (cash, mission progress,
   position, clock, day, armour, packages found) with autosave.

@@ -143,8 +143,15 @@
      dark gradient are switched off here so the scrim is the only
      darkening and the panel sits left). */
   .cf-title-overlay { flex-direction: row; justify-content: flex-start; text-align: left;
-    background: transparent; padding: 0 clamp(28px, 6vw, 84px);
+    background: transparent; padding: 0 clamp(28px, 6vw, 84px); overflow: hidden;
     font-family: 'Inter', 'Segoe UI', system-ui, sans-serif; color: #f4f4f6; user-select: none; }
+  /* v11: GTA-cover-style poster backdrop — a collage of the game's own
+     seeded renders (game/poster.jpg), behind the scrim so the hero
+     panel stays readable. Slow zoom for a living-cover feel. */
+  .cf-poster { position: absolute; inset: 0; pointer-events: none;
+    background: url('poster.jpg') center / cover no-repeat;
+    animation: cf-poster-zoom 30s ease-in-out infinite alternate; }
+  @keyframes cf-poster-zoom { from { transform: scale(1); } to { transform: scale(1.06); } }
   .cf-scrim { position: absolute; inset: 0;
     background:
       radial-gradient(circle at 75% 45%, rgba(255, 94, 126, 0.12), transparent 55%),
@@ -304,6 +311,7 @@
 </div>
 
 <div class="overlay cf-title-overlay" id="screen-title">
+  <div class="cf-poster"></div>
   <div class="cf-scrim"></div>
   <main class="cf-hero-panel">
     <div class="cf-kicker">CORAL ROW · OPEN-WORLD CRIME</div>
