@@ -1,5 +1,11 @@
 # Costa Fuego
 
+[![make.fun · gta6-01](https://make.fun/badge/gta6-01.svg)](https://make.fun/bounty/gta6-01?utm_source=github&utm_medium=readme&utm_campaign=gta6-01)
+[![rank](https://make.fun/badge/gta6-01/nycthyraxo-oss/gta6-01/rank.svg)](https://make.fun/bounty/gta6-01/leaderboard?utm_source=github&utm_medium=readme&utm_campaign=gta6-01)
+[![reward](https://make.fun/badge/gta6-01/nycthyraxo-oss/gta6-01/reward.svg)](https://make.fun/bounty/gta6-01?utm_source=github&utm_medium=readme&utm_campaign=gta6-01)
+
+Entry for the [make.fun bounty gta6-01](https://make.fun/bounty/gta6-01).
+
 An open-world crime sandbox in the browser: walk or drive around the
 coastal city of Costa Fuego, steal cars, run jobs for Marla Quinn at
 her garage, race the avenues, deliver packages, and stay ahead of the
