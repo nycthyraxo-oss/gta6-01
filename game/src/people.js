@@ -277,6 +277,37 @@ export function spawnFleeingPed(scene, x, z, awayDir) {
   };
 }
 
+// v10 (user addition 1): a night-market shopper — same figure, no
+// apron, standing in the market walkway facing a stall. Stationary
+// like a vendor (state 'vendor': stands at its spot, flees gunfire,
+// walks back after a panic), so the market reads as a place with
+// customers, not just stalls.
+export function spawnShopper(scene, rng, x, z, facing) {
+  const mesh = makePersonMesh(
+    SHIRT_COLORS[Math.floor(rng.next() * SHIRT_COLORS.length)],
+    PANTS_COLORS[Math.floor(rng.next() * PANTS_COLORS.length)],
+    SKIN_TONES[Math.floor(rng.next() * SKIN_TONES.length)],
+    {
+      height: 0.95 + rng.next() * 0.1,
+      hair: HAIR_COLORS[Math.floor(rng.next() * HAIR_COLORS.length)],
+    },
+  );
+  mesh.position.set(x, 0, z);
+  mesh.rotation.y = facing;
+  scene.add(mesh);
+  return {
+    group: mesh,
+    heading: facing,
+    speed: 0,
+    state: 'vendor',
+    home: { x, z, facing },
+    fleeX: 0,
+    fleeZ: 0,
+    walkTimer: 0,
+    bob: rng.range(0, Math.PI * 2),
+  };
+}
+
 // A mercado vendor: same figure, apron on, standing behind a stall and
 // facing the street. Vendors do not walk — they are street life, not
 // traffic — but they still flee gunfire like everyone else.

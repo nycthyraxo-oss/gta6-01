@@ -19,7 +19,7 @@ import { CONFIG, MISSION_DEFS } from './config.js';
 import { createRandom } from './random.js';
 import { buildCity, districtAt, streetAt } from './city.js';
 import { createCar, spawnTrafficCar, updateTrafficCar, createSkids, randomCarColor, makeCarMesh, disposeCarMesh, spinWheels, steerWheels, SPECS } from './vehicles.js';
-import { makePersonMesh, spawnPedestrian, spawnVendor, updatePedestrian, spawnEnemy, updateEnemy, markWitness, clearWitness, spawnFleeingPed, nearestBlock } from './people.js';
+import { makePersonMesh, spawnPedestrian, spawnVendor, spawnShopper, updatePedestrian, spawnEnemy, updateEnemy, markWitness, clearWitness, spawnFleeingPed, nearestBlock } from './people.js';
 import { createWanted, addHeat, setStars, ensurePolice, updatePolice, clearPolice, pursuers } from './police.js';
 import { createMissions, startMission, updateMission, completeMission, failMission, currentMission, currentTarget, missionObjectiveText, stageLabel, missionProgress, nextMissionTitle, advanceDialogue, DIALOGUE_LINE_SECONDS } from './missions.js';
 import { createAudio } from './audio.js';
@@ -767,6 +767,11 @@ export function createGame(canvas, seed) {
   }
   for (const stall of city.stallSpots) {
     pedestrians.push(spawnVendor(scene, rng, stall.vx, stall.vz, stall.vFacing));
+  }
+  // v10 (user addition 1): night-market shoppers standing in the
+  // beach market walkway (stationary, like vendors).
+  for (const spot of city.shopperSpots || []) {
+    pedestrians.push(spawnShopper(scene, rng, spot.x, spot.z, spot.facing));
   }
 
   const enemies = [];
@@ -2419,6 +2424,16 @@ export function createGame(canvas, seed) {
   function updateHeli(dt) {
     const pp = playerPos();
     city.heli.userData.rotor.rotation.y += dt * 18;
+    // v10 (user addition 3): the decorative speedboats ride the swell
+    // — a gentle bob + roll on the game clock (deterministic in
+    // staged shots, like the sea shader).
+    if (city.boats) {
+      for (const b of city.boats) {
+        b.group.position.y = b.baseY + Math.sin(state.time * 0.9 + b.phase) * 0.1;
+        b.group.rotation.z = Math.sin(state.time * 0.7 + b.phase) * 0.04;
+        b.group.rotation.x = Math.cos(state.time * 0.6 + b.phase) * 0.03;
+      }
+    }
     if (wanted.heliActive) {
       // v9 iteration 4: at 5 stars (MAXIMUM) the heli stops orbiting and
       // hovers directly over the player — the spotlight TRACKS them, and
@@ -4139,6 +4154,9 @@ export function createGame(canvas, seed) {
       traffic: () => traffic.map((c) => ({
         x: Math.round(c.group.position.x), z: Math.round(c.group.position.z),
         speed: Math.round(c.speed * 100) / 100, heading: Math.round(c.heading * 100) / 100,
+        // v10 (user fix 2): the probe asserts every traffic car carries
+        // a visible NPC driver.
+        driver: !!(c.driver && c.driver.visible),
       })),
       playerCar: () => {
         const car = player.car;

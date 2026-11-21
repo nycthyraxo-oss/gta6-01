@@ -30,10 +30,18 @@ drive the boardwalk at dusk.
   pharmacy, burger joint, surf shop, and a minimarket with a personal
   easter-egg name). The landmarks are named too: TALLER MARLA on the
   garage, FUEGO BANK on the bank, COSTA GENERAL on the hospital, FUEGO
-  TOWER on the tower.
+  TOWER on the tower. Costa General is dressed like the others: a lit
+  window grid on all four faces, cornice and plinth trim, an entrance
+  with glass doors under a canopy and an EMERGENCY board, and a red
+  cross under its name board.
 - **The beach:** a full coastal strip, not a label — palm-lined sand,
   a plank boardwalk, a lifeguard tower, beach umbrellas, the sea at the
-  east edge, and the deco hotels facing it.
+  east edge, and the deco hotels facing it. A night market runs along
+  the sand: six stalls in two facing rows with striped awnings, lit
+  signs (SATAY GRILL, COCONUT BAR, SEAFOOD...), goods on the counters,
+  string lights overhead, a vendor behind every stall and shoppers
+  browsing. Five decorative speedboats bob on the water off the beach
+  (scenery only — they are not drivable).
 - **Parks and street life:** two green parks with paths, leafy trees and
   benches; sidewalks dressed with hydrants, bins and benches; working
   traffic lights that cycle over the junctions; a mercado with six stalls
@@ -55,12 +63,18 @@ drive the boardwalk at dusk.
   Cars take damage now: crashes and police rams lower the condition, and a
   battered car runs slower — the speedo shows the condition, and a respray
   at Taller Marla fixes it up.
-- **Traffic and pedestrians:** 22 AI cars cruising the road grid — they
-  brake for cars and pedestrians ahead, turn at junctions, and stop at
-  red lights (yellow means stop if there is room) — plus 34 pedestrians
-  walking waypoint loops on the sidewalk rings who flee gunfire, and
-  vendors at the mercado. Parked cars stand at the road edge, clear of
-  the traffic lanes, so the city keeps moving.
+- **Traffic and pedestrians:** 22 AI cars cruising the road grid, each
+  with a visible driver behind the wheel (bright shirt, cap, readable
+  through the glass). They brake for the car ahead in their own lane and
+  for pedestrians crossing it, roll one seeded turn decision per
+  junction approach, and stop at red lights (yellow means stop if there
+  is room). A stall watchdog creeps a car forward if it has stood for
+  15 s behind a stopped car with a green light, so a junction can never
+  lock up permanently — queues clear when the light turns. Plus 50
+  people: 34 pedestrians walking waypoint loops on the sidewalk rings
+  who flee gunfire, 12 vendors behind the mercado and night-market
+  stalls, and 4 shoppers browsing the market. Parked cars stand at the
+  road edge, clear of the traffic lanes, so the city keeps moving.
 - **Solid buildings:** every building is a solid collider — the player,
   cars, pedestrians and police are all pushed out of walls instead of
   walking through them. A respray at Taller Marla triggers from the
@@ -112,8 +126,10 @@ drive the boardwalk at dusk.
   the taking — $25 a car, with a short cooldown and a cap so the city
   never floods.
 - **Neon Plaza:** a central plaza landmark one block east of the tower — a
-  paved circle, a fountain with a glowing water disc and neon rings around
-  its column, benches and palms. It is named on the city map.
+  green grass circle with a gravel path ring around a fountain with a
+  glowing water disc and neon rings around its column, benches and
+  palms, all inside the block and clear of the streets. It is named on
+  the city map.
 - **Wanted evaded:** escape a pursuit and the HUD says so — "Wanted Level
   Evaded!" — with a short cooldown before the heat can rise again.
 - **HUD and minimap:** mission banner top-center (chapter, stage, objective,
@@ -205,40 +221,53 @@ main.ts                 the entry program: copies game/ + screenshots/ to
 
 ## Validation
 
-- **Local check** (`node cli/makefun.mjs check`, 20 Nov 2026): 4 passed,
+- **Local check** (`node cli/makefun.mjs check`, 21 Nov 2026): 4 passed,
   0 failed, 16 skipped, 5 at-submission items (repo_public, repo_owner,
   repo_created_after_open, commit_in_repo, duplicate_snapshot — all resolved
   at submit time by the public GitHub repo).
 - **Determinism:** `main.ts` run twice into two directories — `diff -r`
   byte-identical; the 4 screenshot renders re-run — byte-identical
   (same SHA-256 for all 4 JPEGs and shots.json).
-- **Probe** (headless Chrome over CDP, 20 Nov 2026): 89 passed, 0 failed —
+- **Probe** (headless Chrome over CDP, 21 Nov 2026): 95 passed, 0 failed —
   full check suite including traffic flow, pedestrian movement, building
   solidity, pairwise building overlaps (0), traffic-light poles on
-  sidewalks (32 corner poles, all off-road) and the placement audit.
+  sidewalks (32 corner poles, all off-road) and the placement audit. The
+  v10 guardrails assert the playtest fixes directly: traffic keeps
+  flowing over a sustained window (≥70% of cars displaced >6 m, ≤2
+  frozen) with a visible driver in every car; the Ammu-Nation and Pay
+  'n' Spray footprints are fully off-road and clear of buildings and
+  poles; the Neon Plaza park disc (r16) clears every road band; every
+  palm/tree trunk stands ≥2.5 m clear of the asphalt; the night market
+  (6 beach stalls, 4 shoppers) and 5 speedboats are placed; the police
+  helicopter is active at 4 stars.
 - **Play-test** (headless Chrome over CDP, real keyboard/mouse input,
-  20 Nov 2026): 78 passed, 5 failed. The 5 are software-rendering
-  limits, not game bugs: under SwiftShader the game runs at ~0.02× real
-  time, so the blind walk-to-garage seeker exhausts its 30-step budget
-  26 m short (the walk itself works — 52 m → 26 m on the correct
-  heading) and its payout/mission-2 cascades fail with it, plus one
-  pointer-lock timing race (the lock engaged after the pause handler
-  ran; the suppression path exits it on arrival, the read was just
-  early). Everything else passes: title → start, WASD walking, E steals
-  a parked car and wanted rises to 1 star with a cruiser patrolling
-  (1 star observes, it does not chase), driving accelerates, E exits
-  the car, roadblock at 3 stars, searchlight helicopter at 4 stars,
-  M opens/closes the city map, P toggles pause both ways, autosave +
-  Continue across a reload, respawn −$200, the staged combat shot
-  truthfully kills one Reef King (4 → 3 left), zero console errors.
-- **Dossier:** `game/src` 16 files, 558,421 B; `game/` 725,578 B total
-  (1 vendored three.js included).
+  21 Nov 2026): 78 passed, 5 failed — the same 5 as v9, all
+  software-rendering limits, not game bugs: under SwiftShader the game
+  runs at ~0.02× real time, so the blind walk-to-garage seeker exhausts
+  its 30-step budget short of the garage (the walk itself works — it
+  closes 42 m → 21 m on the correct heading) and its payout/mission-2
+  cascades fail with it, plus one pointer-lock timing race (the lock
+  engaged after the pause handler ran; the suppression path exits it on
+  arrival, the read was just early). Everything else passes: title →
+  start, WASD walking, E steals a parked car and wanted rises to 1 star
+  with a cruiser patrolling (1 star observes, it does not chase),
+  driving accelerates, E exits the car, roadblock at 3 stars,
+  searchlight helicopter at 4 stars, M opens/closes the city map, P
+  toggles pause both ways, autosave + Continue across a reload, respawn
+  −$200, the staged combat shot truthfully kills one Reef King
+  (4 → 3 left), zero console errors.
+- **Dossier:** `game/src` 16 files, 577,823 B; `game/` 1,303,401 B total
+  (vendored three.js + postprocessing addons included).
 - **Screenshots:** 4 JPEGs, 1280×800 — all real renders of the game's own
-  code, inspected frame by frame (v9, headless Chrome, 20 Nov 2026, zero
-  console errors). 1-chase.jpg 182,755 B (`e7e1effd…`), 2-combat.jpg
-  141,407 B (`5d1caad7…`), 3-map.jpg 99,619 B (`df7304c3…`),
-  4-dialogue.jpg 141,514 B (`7cb71f85…`) — each ≤256 KiB, each
-  byte-identical across two render runs.
+  code, inspected frame by frame (v10, headless Chrome, 21 Nov 2026,
+  zero console errors). 1-chase.jpg 182,329 B (`45efd535…`),
+  2-combat.jpg 145,694 B (`67158415…`), 3-map.jpg 99,659 B
+  (`4b0ac491…`), 4-dialogue.jpg 143,803 B (`48485e98…`) — each
+  ≤256 KiB, each byte-identical across two render runs. Ten further
+  verification viewpoints (both moved shops, the hospital facade, the
+  park, a resized street sign, the night market, a speedboat, live
+  traffic, the 4-star searchlight pool) were rendered and inspected
+  the same way; they are checks, not part of the shipped set.
 
 ## Honest limitations
 

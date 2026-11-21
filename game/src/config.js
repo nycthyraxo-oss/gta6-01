@@ -125,9 +125,19 @@ export const CONFIG = {
   // of mission lines, spawn, package spots and the docks duel. The gun
   // shop sells weapons and ammo; Pay 'n' Spray repairs, repaints and
   // takes bribes.
+  // v10 (user playtest fixes 1 + 1b): both shops used to protrude into
+  // the road — the gun shop at (-128,40) hung 3 m over the x=-140
+  // avenue and 2 m over the z=28 street, the spray shop at (96,112)
+  // hung 4 m over the x=84 avenue. They now sit fully inside their
+  // blocks, beside the neighbouring buildings: the gun shop at
+  // (-64,112) faces Marla's Garage across the x=-84 avenue, the spray
+  // shop at (104,112) faces the x=84 avenue. The scene audit never
+  // caught the old spots — the shop meshes inherited a stale 'dock'
+  // category (exempt from the road check); city.js tags them
+  // 'landmark' now, so the road check covers them.
   shops: {
-    gun: { x: -128, z: 40, name: 'AMMU-NATION COSTA' },
-    spray: { x: 96, z: 112, name: "PAY 'N' SPRAY" },
+    gun: { x: -64, z: 112, name: 'AMMU-NATION COSTA' },
+    spray: { x: 104, z: 112, name: "PAY 'N' SPRAY" },
     // v9 iteration 5: the outfit shop — a beachfront boutique on the
     // boardwalk that sells shirt colours (cosmetic player colours).
     outfit: { x: 160, z: -28, name: 'NEON BOUTIQUE' },

@@ -174,19 +174,42 @@ function makeWheel(r, style = 'sport') {
 }
 
 // A seated driver: torso + head, small enough to read through the glass.
-function makeDriver() {
+// v10 (user fix 2): drivers must READ as people behind the wheel. The
+// old figure wore a near-black shirt (0x2a2e38) against a dark cabin
+// through tinted glass at dusk — invisible, so the frozen jam read as
+// "cars with nobody driving them". The shirt now comes from a bright
+// palette hashed off the car's own colour (zero rng draws, so the
+// seeded city is untouched), and a cap + slightly larger head make
+// the silhouette unmistakable through the glass.
+const DRIVER_SHIRTS = [0xd84a4a, 0x2e6fc2, 0xe8c832, 0x3aa655, 0xe07828, 0x8a5fc2, 0xd8d8d8, 0x3ac2c2];
+function shirtFor(color) {
+  let h = (color ^ (color >> 8) ^ (color >> 16)) >>> 0;
+  h = (h * 2654435761) >>> 0;
+  return DRIVER_SHIRTS[h % DRIVER_SHIRTS.length];
+}
+
+function makeDriver(color = 0x2a2e38) {
   const g = new THREE.Group();
   const torso = new THREE.Mesh(
-    geo('driver-torso', () => new THREE.CapsuleGeometry(0.17, 0.3, 4, 8)),
-    mat(0x2a2e38, 0.9),
+    geo('driver-torso', () => new THREE.CapsuleGeometry(0.18, 0.3, 4, 8)),
+    mat(shirtFor(color), 0.9),
   );
   torso.position.y = 0.25;
   torso.castShadow = true;
   g.add(torso);
-  const head = new THREE.Mesh(geo('driver-head', () => new THREE.SphereGeometry(0.13, 10, 8)), mat(0xc89878, 0.7));
+  const head = new THREE.Mesh(geo('driver-head', () => new THREE.SphereGeometry(0.14, 10, 8)), mat(0xc89878, 0.7));
   head.position.y = 0.62;
   head.castShadow = true;
   g.add(head);
+  const cap = new THREE.Mesh(
+    geo('driver-cap', () => new THREE.SphereGeometry(0.155, 10, 6, 0, Math.PI * 2, 0, Math.PI / 2)),
+    mat(0x22262c, 0.85),
+  );
+  cap.position.y = 0.645;
+  g.add(cap);
+  const brim = new THREE.Mesh(geo('driver-brim', () => new THREE.BoxGeometry(0.2, 0.03, 0.16)), mat(0x22262c, 0.85));
+  brim.position.set(0, 0.655, 0.17);
+  g.add(brim);
   g.visible = false;
   return g;
 }
@@ -507,7 +530,10 @@ export function makeCarMesh(color, isPolice) {
       }
     }
     // Dark cabin behind the glass: dash + seats + driver shadow.
-    group.add(box(W * 0.7, 0.3, cabLen * 0.8, mat(0x14161a, 0.9), 0, bodyY + spec.bodyH / 2 + 0.08, cabZ));
+    // v10 (user fix 2): lowered + thinned — the old slab (top at body
+    // top +0.23) swallowed the driver's torso whole, so only a dark
+    // head showed. The driver's shoulders now clear it.
+    group.add(box(W * 0.7, 0.18, cabLen * 0.8, mat(0x14161a, 0.9), 0, bodyY + spec.bodyH / 2 - 0.02, cabZ));
   }
   // Seats + steering wheel, visible through the glass.
   const seatMat = mat(0x22262c, 0.95);
@@ -519,10 +545,15 @@ export function makeCarMesh(color, isPolice) {
   wheel.position.set(-W * 0.2, bodyY + spec.bodyH / 2 + 0.42, cabZ + 0.28);
   wheel.rotation.x = -0.5;
   group.add(wheel);
-  const driver = makeDriver();
-  // Seated low enough that the head stays under the roofline in the
-  // three-quarter chase shot.
-  driver.position.set(-W * 0.2, bodyY + spec.bodyH / 2 - 0.04, cabZ - 0.05);
+  const driver = makeDriver(color);
+  // Seated so the head sits in the glass band with its top just under
+  // the roofline (v10, user fix 2: the old fixed seat height put a
+  // sedan driver's head through the roof skin and hid the torso in
+  // the cabin slab). Bikes keep the rider on top of the machine.
+  const seatY = spec.kind === 'bike'
+    ? bodyY + spec.bodyH / 2 - 0.04
+    : bodyY + spec.bodyH / 2 + cabH - 0.85;
+  driver.position.set(-W * 0.2, seatY, cabZ - 0.05);
   group.add(driver);
 
   // Wheels: arch lips over them, per-class rims inside, steering on the
@@ -754,6 +785,11 @@ export function createCar(scene, x, z, heading, color, isPolice, cruiseSpeed) {
     turnDir: 1,
     turnSeed: 1,
     turnLock: 0,
+    // v10 (user fix 2): one seeded turn roll per junction approach
+    // (turnRolledAt = the junction line last rolled), plus the stall
+    // watchdog's stopped clock. See updateTrafficCar.
+    turnRolledAt: null,
+    stoppedTime: 0,
     condition: 100,
     // v9 iteration 5: per-class handling — the game multiplies the base
     // car tuning by these. Bikes steer with the front wheel only.
@@ -852,22 +888,35 @@ export function updateTrafficCar(car, dt, cars, cfg, pedestrians) {
   // shots, probes) get their lane from the axis + direction.
   if (r.lane === undefined) r.lane = laneFor(r.axis, r.dir);
   let target = car.cruiseSpeed;
-  // Brake for anything ahead on the same line: other cars (routed or not)
-  // and pedestrians crossing the lane. Lanes are 5 m apart, so a car in
-  // the opposite lane never triggers the brake — only the car ahead in
-  // YOUR lane does.
+  // Brake for the car ahead in YOUR lane and pedestrians crossing it.
+  // Lanes are 5 m apart, so a car in the opposite lane never triggers
+  // the brake — only the car ahead in your lane does.
+  // v10 (user fix 2 — the permanent jam): the brake used to fire for
+  // ANY car near your lane corridor ahead of you, including one on the
+  // PERPENDICULAR road crossing a junction box. Two cars in a junction
+  // box each sat "ahead" of the other along its own axis, braked for
+  // each other forever, and the whole fleet queued into the corner —
+  // a total gridlock within ~90 seconds (reproduced in a standalone
+  // sim of this exact logic, every seed). Now a routed car only
+  // brakes for a true leader: same axis, same direction. Non-routed
+  // cars (parked, the player's car, roadblocks, chasing police) are
+  // physical obstacles and still stop traffic. Cross traffic is the
+  // lights' job, not the brake's.
   const perpOf = (o) => (r.axis === 'x' ? Math.abs(o.group.position.z - (r.line + r.lane)) : Math.abs(o.group.position.x - (r.line + r.lane)));
   const aheadOf = (o) => {
     const a = r.axis === 'x' ? car.group.position.x : car.group.position.z;
     const b = r.axis === 'x' ? o.group.position.x : o.group.position.z;
     return (b - a) * r.dir;
   };
+  let blocker = null;
   for (const other of cars) {
     if (other === car) continue;
+    if (other.route && (other.route.axis !== r.axis || other.route.dir !== r.dir)) continue;
     if (perpOf(other) > 3.4) continue;
     const ahead = aheadOf(other);
     if (ahead > 0 && ahead < cfg.traffic.minGap) {
       target = 0;
+      blocker = other;
       break;
     }
   }
@@ -910,6 +959,21 @@ export function updateTrafficCar(car, dt, cars, cfg, pedestrians) {
   // Traffic AI: cruise, brake for what is ahead, turn at junctions on a
   // seeded coin flip, and now stop at red lights. The same seed always
   // turns the same way at the same junction.
+  // v10 (user fix 2): stall watchdog — insurance against any residual
+  // deadlock the same-direction brake cannot see (police patrols,
+  // staged shots). A car stopped for 15 s behind another ROUTED car
+  // that is itself stopped, with its light green, creeps forward at
+  // 2 m/s until it moves again. Waiting at a red light, for a
+  // pedestrian, or behind a parked / player car is correct behaviour
+  // and never creeps. In the standalone sim the same-direction brake
+  // alone kept every seed flowing for 600 s (longest stop 6.4 s, a
+  // red-light queue), so this should never fire in normal play.
+  if (car.speed < 0.5) car.stoppedTime = (car.stoppedTime || 0) + dt;
+  else car.stoppedTime = 0;
+  if (target === 0 && blocker && blocker.route && blocker.speed < 0.5
+    && car.stoppedTime > 15 && lightFor(r.axis) === 'green') {
+    target = 2;
+  }
   car.speed += (target - car.speed) * Math.min(1, dt * 2);
   if (!Number.isFinite(car.speed)) car.speed = 0;
   const step = car.speed * r.dir * dt;
@@ -933,38 +997,53 @@ export function updateTrafficCar(car, dt, cars, cfg, pedestrians) {
     // Junction turn: the car is crossing a perpendicular road line. A
     // seeded per-car flip decides, so the same seed always turns the same
     // way at the same junction.
+    // v10 (user fix 2): ONE roll per junction approach. The old code
+    // re-rolled on every step inside the 2.5 m window, compounding a
+    // 20-45% turn chance into ~97-100% — cars turned at nearly every
+    // junction, constantly snapping into perpendicular lanes inside
+    // junction boxes, which fed the gridlock the brake fix above
+    // removes. The roll is armed again once the car is between
+    // junctions, so the same line value approached later rolls fresh.
     const lines = car.roadLines;
+    let nearestJ = null;
+    let nearestAhead = Infinity;
     for (const j of lines) {
       const ahead = (j - pos) * r.dir;
-      if (ahead <= 0 || ahead > 2.5) continue;
+      if (ahead > 0 && ahead < nearestAhead) { nearestAhead = ahead; nearestJ = j; }
+    }
+    if (nearestJ === null || nearestAhead > 2.5) {
+      car.turnRolledAt = null;
+    } else if (car.turnRolledAt !== nearestJ) {
+      car.turnRolledAt = nearestJ;
       car.turnSeed = (car.turnSeed * 1103515245 + 12345) % 2147483648;
-      if ((car.turnSeed % 100) / 100 >= car.turnChance) break;
-      // v9 (user fix 1): the turn DIRECTION is re-rolled at every
-      // junction from the same seeded stream — a fixed per-car turn
-      // direction made cars circle the same block forever. Going
-      // straight stays the default (turnChance), so routes wander the
-      // grid instead of looping one spot.
-      car.turnDir = car.turnSeed % 2 === 0 ? 1 : -1;
-      const newAxis = r.axis === 'x' ? 'z' : 'x';
-      const newDir = car.turnDir;
-      const newLane = laneFor(newAxis, newDir);
-      if (newAxis === 'z') {
-        car.group.position.x = j + newLane;
-        r.axis = 'z';
-        r.line = j;
-        r.dir = newDir;
-        r.lane = newLane;
-      } else {
-        car.group.position.z = j + newLane;
-        r.axis = 'x';
-        r.line = j;
-        r.dir = newDir;
-        r.lane = newLane;
+      if ((car.turnSeed % 100) / 100 < car.turnChance) {
+        // v9 (user fix 1): the turn DIRECTION is re-rolled at every
+        // junction from the same seeded stream — a fixed per-car turn
+        // direction made cars circle the same block forever. Going
+        // straight stays the default (turnChance), so routes wander the
+        // grid instead of looping one spot.
+        car.turnDir = car.turnSeed % 2 === 0 ? 1 : -1;
+        const newAxis = r.axis === 'x' ? 'z' : 'x';
+        const newDir = car.turnDir;
+        const newLane = laneFor(newAxis, newDir);
+        if (newAxis === 'z') {
+          car.group.position.x = nearestJ + newLane;
+          r.axis = 'z';
+          r.line = nearestJ;
+          r.dir = newDir;
+          r.lane = newLane;
+        } else {
+          car.group.position.z = nearestJ + newLane;
+          r.axis = 'x';
+          r.line = nearestJ;
+          r.dir = newDir;
+          r.lane = newLane;
+        }
+        car.heading = headingFor(r.axis, r.dir);
+        car.group.rotation.y = car.heading;
+        car.turnLock = 14;
+        car.turnRolledAt = null;
       }
-      car.heading = headingFor(r.axis, r.dir);
-      car.group.rotation.y = car.heading;
-      car.turnLock = 14;
-      break;
     }
   }
   car.wheelSpin += car.speed * dt * 2;
